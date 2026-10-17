@@ -1,2 +1,37 @@
-import {Search,ArrowUpRight,X} from 'lucide-react';
-export default function SessionTable({sessions,selected,onSelect,query,setQuery,filter,setFilter}){const rows=sessions.filter(s=>(filter==='All'||s.status===filter)&&`${s.id} ${s.rider} ${s.city}`.toLowerCase().includes(query.toLowerCase()));return <><section className="data-section"><div className="section-title"><div><span>MONITORED EVENTS / SYNTHETIC</span><h2>LIVE SESSION FEED</h2></div><div className="table-tools"><label><Search/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search rider, city, session"/></label><select value={filter} onChange={e=>setFilter(e.target.value)} aria-label="Filter sessions">{['All','Normal','Observed','Elevated','Uncertain'].map(x=><option key={x}>{x}</option>)}</select></div></div><div className="session-table" role="table"><div className="tr th"><span>SESSION</span><span>RIDER / CITY</span><span>DEVICE</span><span>RISK</span><span>CONF.</span><span>DECISION</span><span>LAST EVENT</span></div>{rows.map(s=><button className="tr" onClick={()=>onSelect(s)} key={s.id}><b>{s.id}</b><span>{s.rider}<small>{s.city}</small></span><span>{s.device}</span><strong className={`risk r${s.risk}`}>{s.risk}</strong><span>{s.confidence}%</span><em>{s.decision}</em><span>{s.last}<ArrowUpRight/></span></button>)}</div></section>{selected&&<aside className="drawer" aria-label="Session details"><button className="drawer-close" onClick={()=>onSelect(null)} aria-label="Close session details"><X/></button><span>SESSION DETAIL / {selected.id}</span><h2>{selected.rider}</h2><p>{selected.riderId} · {selected.city} · {selected.device} device</p><div className="score-pair"><div><b>{selected.risk}</b><span>RISK SCORE</span></div><div><b>{selected.confidence}%</b><span>CONFIDENCE</span></div></div><h3>BEHAVIORAL DEVIATIONS</h3>{selected.deviations.length?selected.deviations.map(x=><p className="finding" key={x}>{x}</p>):<p className="finding normal">No material deviation.</p>}<h3>BASELINE STATUS</h3><p>Mature trusted history; suspicious sessions are excluded from baseline updates.</p><h3>POLICY RECOMMENDATION</h3><strong>{selected.decision}</strong><p>This recommendation combines deviations, baseline maturity and data quality. It is not a fraud determination.</p><div className="risk-history"><span>RISK HISTORY</span>{[18,22,31,selected.risk].map((x,i)=><i key={i} style={{height:`${x}%`}}/>)}</div></aside>}</>}
+import { useMemo, useState } from 'react';
+import { ArrowUpDown, Search } from 'lucide-react';
+
+export default function SessionTable({ riders, onSelect }) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('ALL');
+  const [sort, setSort] = useState('confidence');
+  const rows = useMemo(() => riders
+    .filter(rider => filter === 'ALL' || rider.riskLevel === filter)
+    .filter(rider => `${rider.id} ${rider.name} ${rider.city} ${rider.lastEvent}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => sort === 'confidence'
+      ? a.identityConfidence - b.identityConfidence
+      : a.name.localeCompare(b.name)), [riders, query, filter, sort]);
+  return <section className="data-section">
+    <div className="section-title">
+      <div><span>CONTINUOUS SESSION ACTIVITY / DEMO</span><h2>LIVE RIDER FEED</h2></div>
+      <div className="table-tools">
+        <label><Search /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search rider or event" /></label>
+        <select value={filter} onChange={event => setFilter(event.target.value)} aria-label="Filter by risk">
+          {['ALL', 'TRUSTED', 'SUSPICIOUS', 'HIGH RISK'].map(value => <option key={value}>{value}</option>)}
+        </select>
+        <button onClick={() => setSort(sort === 'confidence' ? 'name' : 'confidence')}><ArrowUpDown /> {sort === 'confidence' ? 'CONFIDENCE' : 'RIDER'}</button>
+      </div>
+    </div>
+    <div className="session-table">
+      <div className="rider-row table-head"><span>RIDER</span><span>DEVICE</span><span>IDENTITY CONFIDENCE</span><span>RISK</span><span>AUTOMATED ACTION</span><span>LAST EVENT</span></div>
+      {rows.map(rider => <button className="rider-row" onClick={() => onSelect(rider.id)} key={rider.id}>
+        <strong>{rider.name}<small>{rider.id} · {rider.city}</small></strong>
+        <span>{rider.device}</span>
+        <b className="table-confidence">{rider.identityConfidence}%</b>
+        <em className={rider.riskLevel.toLowerCase().replace(' ', '-')}>{rider.riskLevel}</em>
+        <span>{rider.automatedAction}</span>
+        <span>{rider.lastEvent}</span>
+      </button>)}
+    </div>
+  </section>;
+}

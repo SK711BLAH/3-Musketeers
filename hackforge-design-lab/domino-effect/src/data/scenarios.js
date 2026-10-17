@@ -1,5 +1,4 @@
 export const colors=['#1555d6','#f4f0e8','#ee3b2d','#f0c425','#f4f0e8'];
-
 export const stageDefinitions=[
  {name:'BASELINE',sub:'Learn established patterns',description:"Build a trusted picture from the rider's confirmed historical shifts.",metrics:['42 trusted shifts','Baseline maturity: high'],signals:['Shift timing','Tap cadence','Delivery sequence']},
  {name:'OBSERVE',sub:'Read session signals',description:'Observe interaction and workflow signals without collecting message content or precise routes.',metrics:['18 session events','Data quality: good'],signals:['Order acceptance timing','Task completion time','Device history']},
@@ -34,8 +33,5 @@ export const initialCases=[
  {id:'C-2048',riderId:'R-1042',sessionId:'S-8841',risk:82,confidence:86,signals:['Cadence deviation','Sequence mismatch'],recommended:'Request proportionate verification',verification:'Not requested',status:'Open',notes:'Same device and city. Review behavioral combination.',resolution:'—',timeline:['21:04 Session began','21:11 Deviation cluster detected','21:12 Case created'],audit:['21:12 · System · Case created from deterministic demo']},
  {id:'C-2045',riderId:'R-4470',sessionId:'S-8834',risk:67,confidence:72,signals:['Gradual drift','Shift timing change'],recommended:'Human review',verification:'Pending',status:'In review',notes:'Review historical drift before intervention.',resolution:'—',timeline:['18:02 Shift began','18:44 Third drift event','18:46 Analyst queue'],audit:['18:46 · System · Case queued']}
 ];
-export const evaluationSessions=[
- ...[92,88,84,78,74,71,66,61,57,52,46,39].map((score,i)=>({id:`T-${i+1}`,label:'takeover',score})),
- ...[69,58,49,44,41,37,33,29,24,18,12,8,54,27,31,22,16,35].map((score,i)=>({id:`G-${i+1}`,label:'genuine',score}))
-];
+export const evaluationSessions=[...[92,88,84,78,74,71,66,61,57,52,46,39].map((score,i)=>({id:`T-${i+1}`,label:'takeover',score})),...[69,58,49,44,41,37,33,29,24,18,12,8,54,27,31,22,16,35].map((score,i)=>({id:`G-${i+1}`,label:'genuine',score}))];
 export const metrics={active:1842,analyzed:12848,elevated:37,verification:14,interrupted:5,investigations:2};

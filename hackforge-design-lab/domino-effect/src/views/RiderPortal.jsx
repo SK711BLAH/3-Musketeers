@@ -1,3 +1,28 @@
-import {useState} from 'react';import {Bike,PackageCheck,MapPinCheck,ShieldCheck,Smartphone,MessageCircleWarning} from 'lucide-react';
-const flow=[{label:'START SIMULATED SHIFT',icon:Bike},{label:'ACCEPT DELIVERY',icon:PackageCheck},{label:'CONFIRM PICKUP',icon:MapPinCheck},{label:'CONFIRM DROP-OFF',icon:ShieldCheck}];
-export default function RiderPortal(){const [step,setStep]=useState(0);const [notice,setNotice]=useState('No action needed. Your shift can begin normally.');const [verification,setVerification]=useState(false);const next=()=>{setStep(x=>Math.min(flow.length,x+1));setNotice(step===3?'Delivery completed. No security interruption.':`${flow[Math.min(step+1,3)].label.toLowerCase()} is now available.`)};const submit=type=>{setNotice(`${type} recorded in this browser-only demo. A human review path is available.`)};return <main className="page rider-portal"><section className="rider-nav"><div className="rider-brand"><b>SHADOWPRINT</b><span>RIDER SPACE / DEMO</span></div><span>Hi, Aarav · R-1042</span></section><section className="rider-welcome"><div><span>CURRENT SHIFT / MUMBAI</span><h1>YOU RIDE.<br/><i>WE INTERRUPT LESS.</i></h1><p>Normal behavior should feel normal. Security checks are proportionate, explainable, and open to review.</p></div><div className="security-stamp"><ShieldCheck/><b>ACCOUNT STATUS</b><strong>READY</strong><span>No verification required</span></div></section><section className="shift-flow">{flow.map(({label,icon:Icon},i)=><button disabled={i!==step||step>=flow.length} onClick={next} className={i<step?'complete':i===step?'active':''} key={label}><Icon/><span>0{i+1}</span><b>{i<step?'COMPLETED':label}</b></button>)}</section><div className="rider-notice">{notice}</div><section className="rider-actions"><article><Smartphone/><h2>LEGITIMATE DEVICE CHANGE?</h2><p>Tell support before or during a shift. A device change alone does not mean account sharing.</p><button onClick={()=>submit('Device change report')}>REPORT DEVICE CHANGE</button></article><article><MessageCircleWarning/><h2>FLAGGED INCORRECTLY?</h2><p>Ask for review and explain relevant context. Appeals do not require admitting wrongdoing.</p><button onClick={()=>submit('Incorrect flag report')}>REPORT ACTIVITY</button><button onClick={()=>submit('Appeal')}>SUBMIT APPEAL</button></article><article><ShieldCheck/><h2>VERIFICATION DEMO</h2><p>A code sent to a shared device does not conclusively prove personal identity.</p><button onClick={()=>setVerification(!verification)}>{verification?'RESPOND: DEMO COMPLETE':'OPEN REQUEST'}</button></article></section></main>}
+import { useState } from 'react';
+import { ArrowLeft, Bike, CheckCircle2, ShieldCheck, Smartphone } from 'lucide-react';
+
+export default function RiderPortal({ rider, onComplete, onBack }) {
+  const [progress, setProgress] = useState(0);
+  const pending = rider?.verificationStatus === 'Requested';
+  const complete = () => {
+    setProgress(2);
+    onComplete(rider.id);
+  };
+  return <main className="page rider-experience">
+    <button className="back-link" onClick={onBack}><ArrowLeft /> BACK TO LIVE MONITOR</button>
+    <section className="rider-welcome">
+      <div><span>RIDER EXPERIENCE / SIMULATED VERIFICATION</span><h1>SAME ACCOUNT.<br/>SAME RIDER.<br/><i>STILL YOU?</i></h1><p>Security steps appear only when a meaningful identity change needs resolution.</p></div>
+      <div className={`security-stamp ${pending ? 'pending' : ''}`}><ShieldCheck /><b>SHIFT STATUS</b><strong>{pending ? 'CHECK NEEDED' : 'READY'}</strong><span>{pending ? 'Verification requested' : 'Session can continue'}</span></div>
+    </section>
+    <section className="rider-verification-card">
+      <header><Smartphone /><div><span>IDENTITY CHECK / DEMO ONLY</span><h2>{pending ? 'CONFIRM IT’S YOU' : 'NO INTERRUPTION NEEDED'}</h2></div></header>
+      <p>{pending ? `StillYou? detected a significant change on ${rider.id}. Complete this simulated check to continue the shift.` : 'Your current activity is consistent. You do not need to complete a check.'}</p>
+      {pending && <div className="verification-steps">
+        <button className={progress >= 1 ? 'complete' : ''} onClick={() => setProgress(1)}><Bike /><b>1. REVIEW REQUEST</b><span>See why the check was requested</span></button>
+        <button disabled={progress < 1} className={progress >= 2 ? 'complete' : ''} onClick={complete}><CheckCircle2 /><b>2. COMPLETE SIMULATED CHECK</b><span>No real biometric matching is performed</span></button>
+      </div>}
+      {progress === 2 && <div className="verification-success"><CheckCircle2 /><div><b>VERIFICATION SUCCESSFUL</b><p>Identity confidence restored to 88%. The shift may continue while behaviour is monitored.</p></div></div>}
+    </section>
+    <p className="prototype-note">This prototype simulates a verification outcome. It does not access a camera or perform biometric identity matching.</p>
+  </main>;
+}
