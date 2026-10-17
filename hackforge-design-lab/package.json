@@ -1,0 +1,10 @@
+{
+  "name": "hackforge-design-lab",
+  "private": true,
+  "scripts": {
+    "setup": "npm install --prefix domino-effect",
+    "dev": "npm run dev --prefix domino-effect",
+    "domino": "npm run dev --prefix domino-effect",
+    "build": "npm run build --prefix domino-effect"
+  }
+}

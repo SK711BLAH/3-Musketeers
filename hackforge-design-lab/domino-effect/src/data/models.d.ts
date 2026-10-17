@@ -1,0 +1,12 @@
+export type StageStatus='idle'|'processing'|'normal'|'deviation'|'review-required'|'completed';
+export interface Device{id:string;label:string;trusted:boolean;firstSeen:string}
+export interface BehavioralFeature{id:string;label:string;baseline:number;observed:number;contribution:number}
+export interface BehavioralBaseline{riderId:string;maturity:'low'|'medium'|'high';trustedSessions:number;features:BehavioralFeature[]}
+export interface Rider{id:string;name:string;verified:boolean;city:string;devices:string[];maturity:string;session:string}
+export interface SessionEvent{id:string;sessionId:string;at:string;kind:string;summary:string}
+export interface Session{id:string;riderId:string;city:string;risk:number;confidence:number;decision:string;status:string}
+export interface RiskAssessment{sessionId:string;risk:number;confidence:number;dataQuality:number;signals:string[];recommendation:string;explanation:string}
+export interface VerificationChallenge{id:string;sessionId:string;method:string;status:string;simulated:true}
+export interface InvestigationCase{id:string;sessionId:string;riderId:string;status:string;audit:string[]}
+export interface Scenario{id:string;name:string;risk:number;confidence:number;signals:string[];intervention:string;outcome:string}
+export interface PolicyDecision{threshold:number;action:'allow'|'observe'|'verify'|'review';accountBlocked:false}

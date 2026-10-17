@@ -1,0 +1,17 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+@theme inline{--font-sans:Inter,ui-sans-serif,system-ui;--font-mono:"IBM Plex Mono",ui-monospace,monospace;--color-ink:rgb(var(--ink));--color-paper:rgb(var(--paper));--color-panel:rgb(var(--panel));--color-line:rgb(var(--line));--color-signal:#ff5c35;--color-mint:#3ddc97}
+:root{--paper:244 243 239;--panel:255 255 252;--ink:25 27 29;--line:208 207 201;color-scheme:light} .dark{--paper:14 16 18;--panel:21 24 27;--ink:235 235 228;--line:53 58 62;color-scheme:dark}
+*{box-sizing:border-box}html{font-feature-settings:'cv02','cv03','cv04','cv11'}body{margin:0;background:rgb(var(--paper));color:rgb(var(--ink));font-family:Inter,system-ui,sans-serif}button,input,select,textarea{font:inherit}.focus-ring:focus-visible{outline:2px solid #ff5c35;outline-offset:2px}
+@layer components{
+ .panel{@apply border border-line bg-panel shadow-[0_1px_0_rgba(0,0,0,.04)]}
+ .btn{@apply inline-flex items-center justify-center gap-2 border border-line px-3 py-2 text-sm font-medium transition hover:bg-ink/5 disabled:pointer-events-none disabled:opacity-40}
+ .btn-primary{@apply inline-flex items-center justify-center gap-2 border border-signal bg-signal px-3 py-2 text-sm font-medium text-white transition hover:bg-[#e94f2a] disabled:pointer-events-none disabled:opacity-40}
+ .label{@apply font-mono text-[10px] font-semibold uppercase tracking-[.16em] text-ink/50}
+ .input{@apply w-full border border-line bg-paper px-3 py-2.5 text-sm placeholder:text-ink/35}
+ .status-dot{@apply h-2 w-2 rounded-full}
+ .page-title{@apply text-2xl font-semibold tracking-[-.04em] md:text-3xl}
+}
+.btn:focus-visible,.btn-primary:focus-visible,.input:focus-visible{outline:2px solid #ff5c35;outline-offset:2px}
+@keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.animate-enter{animation:enter .35s ease both}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}

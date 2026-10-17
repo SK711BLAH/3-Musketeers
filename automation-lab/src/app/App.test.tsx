@@ -1,0 +1,2 @@
+import {render,screen} from '@testing-library/react';import {MemoryRouter} from 'react-router-dom';import {describe,expect,it} from 'vitest';import {App} from './App'
+describe('application navigation',()=>{it.each([['/','Operational overview'],['/automations','Automations'],['/simulator','Automation simulator'],['/settings','Settings']])('renders %s',async(path,title)=>{render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);expect(await screen.findByRole('heading',{name:title})).toBeInTheDocument()})})

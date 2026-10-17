@@ -1,0 +1,2 @@
+/** @type {import('tailwindcss').Config} */
+export default { darkMode:'class', content:['./index.html','./src/**/*.{ts,tsx}'], theme:{extend:{fontFamily:{sans:['Inter','ui-sans-serif','system-ui'],mono:['IBM Plex Mono','ui-monospace','monospace']},colors:{ink:'rgb(var(--ink) / <alpha-value>)',paper:'rgb(var(--paper) / <alpha-value>)',panel:'rgb(var(--panel) / <alpha-value>)',line:'rgb(var(--line) / <alpha-value>)',signal:'#ff5c35',mint:'#3ddc97'}}},plugins:[] }

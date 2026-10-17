@@ -1,0 +1,2 @@
+import {describe,expect,it} from 'vitest';import {makeExecution} from './executor';import {workflows} from '../data/demo'
+describe('workflow execution',()=>{it('records a real trace and pending approval',()=>{const e=makeExecution(workflows[1],{failedAttempts:7,locationMismatch:false});expect(e.outcome).toBe('pending');expect(e.trace.some(s=>s.label==='Approval requested')).toBe(true)});it('does not execute when unmatched',()=>expect(makeExecution(workflows[0],{temperature:20,systemOnline:true}).outcome).toBe('no-match'))})

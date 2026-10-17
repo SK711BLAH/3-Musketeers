@@ -1,0 +1,3 @@
+import {CircleUserRound} from 'lucide-react';
+export const views=['OVERVIEW','BEHAVIORAL DNA','INTELLIGENCE LAB','TRUSTBALANCE','INVESTIGATIONS','RIDER PORTAL'];
+export default function Header({view,onNavigate,mode}){return <header className="app-header"><button className="brand" onClick={()=>onNavigate('OVERVIEW')} aria-label="Shadowprint overview"><b>SHADOW</b><i>PRINT</i><small>THE IDENTITY BEHIND THE ACCOUNT</small></button><nav aria-label="Primary navigation">{views.map(n=><button className={view===n?'on':''} onClick={()=>onNavigate(n)} key={n}>{n}</button>)}</nav><div className="demo-mode"><span>{mode}</span><CircleUserRound/></div></header>}

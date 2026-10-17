@@ -1,0 +1,15 @@
+export type Severity='info'|'success'|'warning'|'critical'
+export type Operator='gt'|'lt'|'eq'|'neq'|'gte'|'lte'|'contains'|'isTrue'|'isFalse'
+export type Logic='AND'|'OR'
+export type Role='ADMIN'|'OPERATOR'|'VIEWER'
+export type Condition={id:string;field:string;operator:Operator;value?:string|number|boolean}
+export type Action={type:'alert'|'approval'|'reminder';label:string;severity:Severity}
+export type Workflow={id:string;name:string;description:string;scenario:string;trigger:string;conditions:Condition[];logic:Logic;action:Action;enabled:boolean;createdAt:string;lastRunAt?:string}
+export type TraceStep={id:string;label:string;detail:string;status:'completed'|'failed'|'pending';at:string}
+export type Execution={id:string;workflowId:string;workflowName:string;startedAt:string;outcome:'success'|'failed'|'pending'|'no-match';inputs:Record<string,unknown>;trace:TraceStep[];actionLabel:string}
+export type Activity={id:string;executionId?:string;timestamp:string;name:string;description:string;severity:Severity;status:'success'|'warning'|'error'|'pending';workflowId?:string;details?:Record<string,unknown>}
+export type Notification={id:string;executionId?:string;timestamp:string;title:string;message:string;severity:Severity;read:boolean;relatedActivityId?:string}
+export type Approval={id:string;executionId:string;workflowId:string;workflowName:string;requestedAction:string;reason:string;severity:Severity;evidence:Record<string,unknown>;timestamp:string;state:'PENDING'|'APPROVED'|'REJECTED'}
+export type Audit={id:string;timestamp:string;initiator:string;workflowName:string;action:string;previousStatus:string;newStatus:string;outcome:string;details?:Record<string,unknown>}
+export type Settings={theme:'light'|'dark';role:Role;notifySuccess:boolean;notifyWarning:boolean;confirmSensitive:boolean}
+export type Evaluation={matched:boolean;conditions:{condition:Condition;actual:unknown;passed:boolean;explanation:string}[]}

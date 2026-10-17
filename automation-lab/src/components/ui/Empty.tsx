@@ -1,0 +1,1 @@
+import { Inbox } from 'lucide-react';export function Empty({title,detail}:{title:string;detail:string}){return <div className="grid min-h-48 place-items-center border border-dashed border-line p-8 text-center"><div><Inbox className="mx-auto mb-3 text-ink/30"/><p className="font-medium">{title}</p><p className="mt-1 text-sm text-ink/50">{detail}</p></div></div>}
