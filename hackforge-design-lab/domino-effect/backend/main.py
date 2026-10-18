@@ -28,8 +28,10 @@ from pydantic import BaseModel
 from sklearn.ensemble import IsolationForest
 
 ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "stillyou.db"
-UPLOADS_PATH = ROOT / "uploads"
+RUNTIME_ROOT = Path("/tmp/stillyou") if os.getenv("VERCEL") else ROOT
+RUNTIME_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+DB_PATH = RUNTIME_ROOT / "stillyou.db"
+UPLOADS_PATH = RUNTIME_ROOT / "uploads"
 MODEL_VERSION = "isolation-forest-2026.10.18-v1"
 SIMULATOR_INTERVAL_SECONDS = 4
 BACKGROUND_SIMULATOR_ENABLED = os.getenv("STILLYOU_BACKGROUND_SIMULATOR", "0") == "1"
