@@ -19,8 +19,11 @@ const request = async (path, options = {}) => {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     if (response.status === 401 && token) {
-      clearToken();
-      window.dispatchEvent(new CustomEvent('stillyou:session-expired', { detail: detail.detail ?? 'Your rider session ended. Please sign in again.' }));
+      if (path === '/auth/logout') {
+        clearToken();
+      } else if (path !== '/portal/me' && path !== '/snapshot') {
+        console.warn('Received 401 on API request:', path, detail.detail);
+      }
     }
     throw new Error(detail.detail ?? `Backend request failed (${response.status})`);
   }

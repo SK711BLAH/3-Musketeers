@@ -164,9 +164,8 @@ export default function RiderPortal({ onComplete, onRefresh, onBack }) {
   useEffect(() => {
     if (!api.hasRiderSession()) return;
     api.portalMe().then(setPortal).catch(cause => {
-      sessionStorage.removeItem('stillyou_rider_token');
-      localStorage.removeItem('stillyou_rider_token');
-      setError(`${cause.message}. Please sign in again; your rider data is preserved.`);
+      console.warn('Initial portal load error:', cause.message);
+      setError(`${cause.message}. Please refresh if needed; your rider data is preserved.`);
     }).finally(() => setLoading(false));
   }, []);
 
