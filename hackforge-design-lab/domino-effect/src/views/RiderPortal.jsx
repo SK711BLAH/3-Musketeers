@@ -351,7 +351,7 @@ export default function RiderPortal({ onComplete, onRefresh, onBack }) {
         <div>
           <span>{isFailed ? 'IDENTITY MISMATCH ESCALATED' : 'UNUSUAL ACCOUNT ACTIVITY DETECTED'}</span>
           <h2>{isFailed ? 'Identity verification failed. Account flagged for review.' : 'Identity re-verification required across devices.'}</h2>
-          <p>{isFailed ? 'The biometric scan did not match the registered identity reference. Sensitive delivery operations are restricted.' : 'Overlapping account activity or new device detected during active shift. Verify your identity to continue.'}</p>
+          <p>{isFailed ? 'The biometric scan did not match the registered identity reference. Trust score reduced to 20 (RED). Access maintained for demo.' : 'Overlapping account activity or new device detected during active shift. Verify your identity to continue.'}</p>
         </div>
         <button onClick={() => openVerification('face')}>
           {isFailed ? 'RETRY FACE SCAN' : 'VERIFY WITH FACE'}
@@ -375,7 +375,7 @@ export default function RiderPortal({ onComplete, onRefresh, onBack }) {
       </header>
       <p>
         {isFailed
-          ? 'Biometric mismatch recorded. Trust score reduced to 35 (RED). Escalate for review or re-scan.'
+          ? 'Biometric mismatch recorded. Trust score drastically reduced to 20 (RED). Access maintained for demo.'
           : isRequired
           ? 'Unusual account activity detected across devices. Please complete Face or OTP Verification to restore safe status.'
           : 'Identity baseline established and verified. You can test Face Verification, OTP, or update your registered photograph anytime.'}
@@ -402,35 +402,25 @@ export default function RiderPortal({ onComplete, onRefresh, onBack }) {
           <p>{currentOrder.distance_km} km · about {currentOrder.eta_minutes} min · {currentOrder.status}</p>
           <small>Updated {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(currentOrder.updated_at))}</small>
           {currentOrder.status === 'ACCEPTED' && (
-            <button disabled={isRequired || isFailed} onClick={() => act('PICKED_UP', { order_id: currentOrder.id })}>
+            <button onClick={() => act('PICKED_UP', { order_id: currentOrder.id })}>
               CONFIRM PICKUP
             </button>
           )}
           {currentOrder.status === 'PICKED_UP' && (
-            <button disabled={isRequired || isFailed} onClick={() => act('COMPLETE_DELIVERY', { order_id: currentOrder.id })}>
+            <button onClick={() => act('COMPLETE_DELIVERY', { order_id: currentOrder.id })}>
               COMPLETE DELIVERY
             </button>
-          )}
-          {(isRequired || isFailed) && (
-            <small style={{ color: 'var(--red, #ef4444)', display: 'block', marginTop: '8px' }}>
-              Delivery actions paused: identity verification required.
-            </small>
           )}
         </> : available ? <>
           <h2>{available.id}</h2>
           <div className="route"><b>{available.pickup}</b><i /><b>{available.dropoff}</b></div>
           <p>{available.distance_km} km · about {available.eta_minutes} min</p>
           <div className="order-actions">
-            <button disabled={!rider.online || rider.paused || isRequired || isFailed} onClick={() => act('ACCEPT_DELIVERY', { order_id: available.id })}>
+            <button disabled={!rider.online || rider.paused} onClick={() => act('ACCEPT_DELIVERY', { order_id: available.id })}>
               ACCEPT DELIVERY
             </button>
             <button onClick={() => act('DECLINE_DELIVERY', { order_id: available.id })}>DECLINE</button>
           </div>
-          {(isRequired || isFailed) && (
-            <small style={{ color: 'var(--red, #ef4444)', display: 'block', marginTop: '8px' }}>
-              Accepting orders paused: identity verification required.
-            </small>
-          )}
         </> : <p>No delivery is waiting right now.</p>}
       </article>
 

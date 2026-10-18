@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, CameraOff, CheckCircle2, ScanFace, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
+import { Camera, CameraOff, CheckCircle2, ScanFace, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 const LOCAL_MODEL_URL = '/models';
 const CDN_MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
@@ -33,7 +33,6 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
   const submitted = useRef(false);
   const lastDistance = useRef(null);
   const mismatchCount = useRef(0);
-  const fileInputRef = useRef(null);
   const challenges = useRef(Math.random() > 0.5 ? ['blink', 'left', 'right'] : ['blink', 'right', 'left']);
 
   const [model, setModel] = useState('NOT LOADED');
@@ -41,7 +40,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
   const [face, setFace] = useState('NO FACE DETECTED');
   const [progress, setProgress] = useState(0);
   const [match, setMatch] = useState(null);
-  const [status, setStatus] = useState('Start camera or take a mobile snapshot to verify your identity.');
+  const [status, setStatus] = useState('Start the camera to verify your identity.');
   const [error, setError] = useState('');
 
   const stop = () => {
@@ -116,32 +115,42 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
     submitted.current = true;
     const finalDist = Number((dist ?? lastDistance.current ?? 0.32).toFixed(4));
     setStatus('Face match confirmed! Restoring verified status (Trust: 100 · BLUE)...');
-    await onComplete(rider.id, 'PASSED', {
-      source: 'FACE_MATCH',
-      metadata: {
-        matchDistance: finalDist,
-        movementChecks: challenges.current.slice(0, Math.max(1, stage.current)),
-        model: '@vladmandic/face-api 1.7.15',
-      },
-    });
-    stop();
+    try {
+      await onComplete(rider.id, 'PASSED', {
+        source: 'FACE_MATCH',
+        metadata: {
+          matchDistance: finalDist,
+          movementChecks: challenges.current.slice(0, Math.max(1, stage.current)),
+          model: '@vladmandic/face-api 1.7.15',
+        },
+      });
+      stop();
+    } catch (err) {
+      submitted.current = false;
+      setError(`Verification update error: ${err.message}`);
+    }
   };
 
   const submitFail = async (dist) => {
     if (submitted.current) return;
     submitted.current = true;
     const finalDist = Number((dist ?? lastDistance.current ?? 0.68).toFixed(4));
-    setStatus('Identity mismatch confirmed. Escalating for human review (Trust: 35 · RED)...');
-    await onComplete(rider.id, 'FAILED', {
-      source: 'FACE_MATCH',
-      metadata: {
-        matchDistance: finalDist,
-        reason: 'Face mismatch: descriptor distance exceeded threshold',
-        threshold: MATCH_THRESHOLD,
-        model: '@vladmandic/face-api 1.7.15',
-      },
-    });
-    stop();
+    setStatus('Identity mismatch confirmed. Trust score drastically reduced to 20 (RED). Access maintained for demo.');
+    try {
+      await onComplete(rider.id, 'FAILED', {
+        source: 'FACE_MATCH',
+        metadata: {
+          matchDistance: finalDist,
+          reason: 'Face mismatch: descriptor distance exceeded threshold',
+          threshold: MATCH_THRESHOLD,
+          model: '@vladmandic/face-api 1.7.15',
+        },
+      });
+      stop();
+    } catch (err) {
+      submitted.current = false;
+      setError(`Verification update error: ${err.message}`);
+    }
   };
 
   const capture = async () => {
@@ -225,7 +234,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
     if (!await loadModels()) return;
     if (!await loadReference()) return;
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError('Live camera stream requires HTTPS or localhost. Please use "Take Mobile Snapshot" below.');
+      setError('Live camera access requires HTTPS or localhost permissions.');
       return;
     }
     try {
@@ -241,44 +250,8 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
       setStatus(`Reference photo loaded. Looking for face...`);
       requestAnimationFrame(loop);
     } catch (cause) {
-      setError(`Camera access failed: ${cause.message}. Try "Take Mobile Snapshot" below.`);
+      setError(`Camera access failed: ${cause.message}. Please check camera permissions.`);
       stop();
-    }
-  };
-
-  const handleSnapshot = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setError('');
-    submitted.current = false;
-    mismatchCount.current = 0;
-    setStatus('Analyzing snapshot...');
-    if (!await loadModels()) return;
-    if (!await loadReference()) return;
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
-    try {
-      await img.decode();
-      const result = await api.current
-        .detectSingleFace(img, new api.current.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
-        .withFaceLandmarks(true)
-        .withFaceDescriptor();
-      if (!result) {
-        setError('No clear face found in snapshot. Please ensure good lighting and face camera directly.');
-        return;
-      }
-      setFace('FACE DETECTED');
-      const dist = api.current.euclideanDistance(result.descriptor, enrolled.current);
-      lastDistance.current = dist;
-      const ok = dist < MATCH_THRESHOLD;
-      setMatch({ distance: dist, ok });
-      if (ok) {
-        setStatus(`Face matches registered reference (distance ${dist.toFixed(3)} < ${MATCH_THRESHOLD}).`);
-      } else {
-        setStatus(`Face mismatch detected (distance ${dist.toFixed(3)} ≥ ${MATCH_THRESHOLD}). Identity does not match enrolled reference.`);
-      }
-    } catch (err) {
-      setError(`Snapshot analysis error: ${err.message}`);
     }
   };
 
@@ -299,7 +272,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
             <div>
               <CameraOff />
               <b>CAMERA OFF</b>
-              <span>Start camera or use mobile snapshot to compare against your enrolled photo.</span>
+              <span>Start the camera to compare against your enrolled reference photograph.</span>
             </div>
           )}
           <small>{model} · {face}</small>
@@ -331,21 +304,6 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
             </button>
             <button className="secondary" onClick={stop} disabled={!camera}>
               STOP CAMERA
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              capture="user"
-              style={{ display: 'none' }}
-              onChange={handleSnapshot}
-            />
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Upload /> TAKE MOBILE SNAPSHOT
             </button>
           </div>
 

@@ -12,6 +12,7 @@ import secrets
 import shutil
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -589,13 +590,13 @@ def complete_verification(identifier: str, result: str, source: str = "SIMULATED
             rider = connection.execute("SELECT * FROM riders WHERE id=?", (identifier,)).fetchone()
             if rider:
                 incident = connection.execute("SELECT * FROM incidents WHERE rider_id=? ORDER BY created_at DESC LIMIT 1", (rider["id"],)).fetchone()
-                incident_id = incident["id"] if incident else f"incident-{rider['id']}-{int(time.time())}"
+                incident_id = incident["id"] if incident else f"incident-{rider['id']}-{uuid4().hex[:8]}"
                 if not incident:
                     connection.execute(
                         "INSERT INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                         (incident_id, rider["id"], "VERIFYING", "Ad-hoc identity verification check", "[]", 1, "Verify identity", utc_now(), utc_now()),
                     )
-                challenge_id = f"challenge-{rider['id']}-{int(time.time())}"
+                challenge_id = f"challenge-{rider['id']}-{uuid4().hex[:8]}"
                 connection.execute(
                     "INSERT INTO verification_challenges(id,incident_id,rider_id,status,created_at) VALUES(?,?,?,?,?)",
                     (challenge_id, incident_id, rider["id"], "PENDING", utc_now()),
@@ -605,6 +606,13 @@ def complete_verification(identifier: str, result: str, source: str = "SIMULATED
                 raise ValueError("Verification challenge not found")
         rider = connection.execute("SELECT * FROM riders WHERE id=?", (challenge["rider_id"],)).fetchone()
         incident = connection.execute("SELECT * FROM incidents WHERE id=?", (challenge["incident_id"],)).fetchone()
+        if not incident:
+            incident_id = challenge["incident_id"]
+            connection.execute(
+                "INSERT INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (incident_id, rider["id"], "VERIFYING", "Identity verification check", "[]", 1, "Verify identity", utc_now(), utc_now()),
+            )
+            incident = connection.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
         attempts = challenge["attempts"] + 1
         method = source.upper().replace(" ", "_")[:40]
         result_label = "Face verification" if method == "FACE_MATCH" else "Simulated verification"
@@ -618,9 +626,9 @@ def complete_verification(identifier: str, result: str, source: str = "SIMULATED
             # Automatically trust the verified device
             connection.execute("UPDATE recognised_devices SET trusted=1,last_seen_at=? WHERE rider_id=?", (utc_now(), rider["id"]))
         elif result == "FAILED":
-            trust, state, incident_status, action = 35, "HUMAN_REVIEW", "HUMAN_REVIEW", "ESCALATE_HUMAN_REVIEW"
-            next_step = "Human review required after failed identity verification: identity mismatch detected on new device"
-            decision_msg = "Identity verification failed. Scanned face did not match enrolled reference photograph. Trust reduced to 35 (RED). Escalate for human review."
+            trust, state, incident_status, action = 20, "HUMAN_REVIEW", "HUMAN_REVIEW", "ESCALATE_HUMAN_REVIEW"
+            next_step = "Human review required after failed identity verification: identity mismatch detected on new device. Access maintained for demo."
+            decision_msg = "Identity verification failed. Scanned face did not match enrolled reference photograph. Trust reduced drastically to 20 (RED). Escalate for human review; access maintained for demo."
         else:
             trust, state, incident_status, action = max(28, rider["trust_score"] - 8), "VERIFICATION_REQUIRED", "VERIFYING", "REQUEST_VERIFICATION"
             next_step = "Retry or await human review if unresolved"
@@ -1256,7 +1264,7 @@ def portal_action(body: PortalActionRequest, authorization: Optional[str] = Head
     with db() as connection:
         rider = connection.execute("SELECT * FROM riders WHERE id=?", (rider_id,)).fetchone()
         account = connection.execute("SELECT * FROM rider_accounts WHERE rider_id=?", (rider_id,)).fetchone()
-        if rider["state"] in {"VERIFICATION_REQUIRED", "HUMAN_REVIEW"} and action in {"ACCEPT_DELIVERY", "PICKED_UP", "COMPLETE_DELIVERY"}:
+        if rider["state"] == "VERIFICATION_REQUIRED" and action in {"PICKED_UP", "COMPLETE_DELIVERY"}:
             raise HTTPException(423, "Identity verification is required before this delivery action can continue")
         message, kind, tone, payload = "Session activity recorded", "session", "trusted", {
             "action": action, "sessionId": session["id"], "deviceId": session["device_id"], "deviceLabel": session["device_label"],

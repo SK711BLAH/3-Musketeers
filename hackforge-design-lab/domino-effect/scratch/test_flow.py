@@ -106,16 +106,16 @@ def main():
         }
     })
     print(f"Face verification FAILED result:")
-    print(f"Trust: {fail_res['trustScore']} (Expected: 35)")
+    print(f"Trust: {fail_res['trustScore']} (Expected: 20)")
     print(f"State: {fail_res['state']} (Expected: HUMAN_REVIEW)")
-    assert fail_res["trustScore"] == 35, f"Expected 35, got {fail_res['trustScore']}"
+    assert fail_res["trustScore"] == 20, f"Expected 20, got {fail_res['trustScore']}"
     assert fail_res["state"] == "HUMAN_REVIEW"
     
     # Verify Admin Dashboard Snapshot shows RED
     status, snapshot_s4a = request("/snapshot")
     demo_s4a = next((r for r in snapshot_s4a["riders"] if r["id"] == "R-9001"), None)
     print(f"Dashboard snapshot after mismatch: Trust={demo_s4a['trustScore']}, Severity={demo_s4a['riskLevel']}")
-    assert demo_s4a["trustScore"] == 35
+    assert demo_s4a["trustScore"] == 20
     assert demo_s4a["riskLevel"] == "HIGH RISK" # RED
     
     # 4. OTP security test: Passing OTP alone must NOT override confirmed face mismatch
@@ -132,7 +132,7 @@ def main():
     print(f"Rider state after OTP: {otp_verify['rider']['state']}")
     assert otp_verify["result"] == "PASSED_RESTRICTED"
     assert otp_verify["rider"]["state"] == "HUMAN_REVIEW"
-    assert otp_verify["rider"]["trustScore"] == 35
+    assert otp_verify["rider"]["trustScore"] == 20
     print("SUCCESS: OTP alone correctly rejected from overriding face mismatch!")
     
     # 5. Reset Demo Rider for Stage 4B
