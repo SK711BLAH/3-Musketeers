@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "framework": "vite",
+  "buildCommand": "VITE_GOOGLE_CLIENT_ID=856309347449-qn4tgjoepqkg1pv7s3rtvrakkiba3m4r.apps.googleusercontent.com npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
