@@ -1,37 +1,59 @@
-import { useMemo, useState } from 'react';
-import { ArrowUpDown, Search } from 'lucide-react';
+import { useMemo } from 'react';
+import { Activity, Radio } from 'lucide-react';
 
-export default function SessionTable({ riders, onSelect }) {
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState('ALL');
-  const [sort, setSort] = useState('confidence');
-  const rows = useMemo(() => riders
-    .filter(rider => filter === 'ALL' || rider.riskLevel === filter)
-    .filter(rider => `${rider.id} ${rider.name} ${rider.city} ${rider.lastEvent}`.toLowerCase().includes(query.toLowerCase()))
-    .sort((a, b) => sort === 'confidence'
-      ? a.identityConfidence - b.identityConfidence
-      : a.name.localeCompare(b.name)), [riders, query, filter, sort]);
-  return <section className="data-section">
-    <div className="section-title">
-      <div><span>CONTINUOUS SESSION ACTIVITY / DEMO</span><h2>LIVE RIDER FEED</h2></div>
-      <div className="table-tools">
-        <label><Search /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search rider or event" /></label>
-        <select value={filter} onChange={event => setFilter(event.target.value)} aria-label="Filter by risk">
-          {['ALL', 'TRUSTED', 'SUSPICIOUS', 'HIGH RISK'].map(value => <option key={value}>{value}</option>)}
-        </select>
-        <button onClick={() => setSort(sort === 'confidence' ? 'name' : 'confidence')}><ArrowUpDown /> {sort === 'confidence' ? 'CONFIDENCE' : 'RIDER'}</button>
+const riskMeta = rider => {
+  if (rider.state === 'HUMAN_REVIEW' || rider.riskLevel === 'HIGH RISK') return { label: 'ESCALATED', tone: 'risk' };
+  if (rider.verificationRequired || rider.riskLevel === 'SUSPICIOUS') return { label: 'VERIFICATION', tone: 'watch' };
+  return { label: 'NORMAL', tone: 'normal' };
+};
+
+const relativeTime = timestamp => {
+  if (!timestamp) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(new Date(timestamp));
+};
+
+const eventIsMeaningful = event => event.riderId !== 'SYSTEM'
+  && !event.event_key?.startsWith('scenario-')
+  && !event.payload?.method?.startsWith('SIMULATED');
+
+export default function SessionTable({ riders, events, onSelect }) {
+  const activeRiders = useMemo(() => riders
+    .filter(rider => rider.online)
+    .sort((a, b) => a.trustScore - b.trustScore || a.name.localeCompare(b.name)), [riders]);
+  const feed = useMemo(() => events.filter(eventIsMeaningful).slice(-12).reverse(), [events]);
+
+  return <section className="dashboard-streams" aria-label="Active riders and live activity">
+    <section className="active-riders-card">
+      <header><div><span>LIVE IDENTITIES</span><h2>ACTIVE RIDERS</h2></div><strong>LOWEST TRUST FIRST</strong></header>
+      <div className="active-riders-table">
+        <div className="active-rider-row table-head"><span>RIDER</span><span>LOCATION</span><span>TRUST SCORE</span><span>LAST SEEN</span><span>STATUS</span></div>
+        {activeRiders.length ? activeRiders.map(rider => {
+          const status = riskMeta(rider);
+          return <button className="active-rider-row" onClick={() => onSelect(rider.id)} key={rider.id}>
+            <strong>{rider.name}<small>{rider.id}</small></strong>
+            <span>{rider.currentLocation || rider.city}</span>
+            <span className={`trust-meter ${status.tone}`}><b>{rider.trustScore}</b><i><em style={{ width: `${rider.trustScore}%` }} /></i></span>
+            <time dateTime={rider.lastUpdated}>{relativeTime(rider.lastUpdated)}</time>
+            <span className={`rider-status ${status.tone}`}>{status.label}</span>
+          </button>;
+        }) : <p className="empty-dashboard-state">No riders are currently online.</p>}
       </div>
-    </div>
-    <div className="session-table">
-      <div className="rider-row table-head"><span>RIDER</span><span>DEVICE</span><span>IDENTITY CONFIDENCE</span><span>RISK</span><span>AUTOMATED ACTION</span><span>LAST EVENT</span></div>
-      {rows.map(rider => <button className="rider-row" onClick={() => onSelect(rider.id)} key={rider.id}>
-        <strong>{rider.name}<small>{rider.id} · {rider.city}</small></strong>
-        <span>{rider.device}</span>
-        <b className="table-confidence">{rider.identityConfidence}%</b>
-        <em className={rider.riskLevel.toLowerCase().replace(' ', '-')}>{rider.riskLevel}</em>
-        <span>{rider.automatedAction}</span>
-        <span>{rider.lastEvent}</span>
-      </button>)}
-    </div>
+    </section>
+
+    <section className="live-activity-card">
+      <header><div><span>BACKEND EVENTS</span><h2>LIVE ACTIVITY</h2></div><Radio /></header>
+      <div className="live-event-list" aria-live="polite">
+        {feed.length ? feed.map(event => <button key={event.id} className={`live-event ${event.tone}`} onClick={() => onSelect(event.riderId)}>
+          <i aria-hidden="true" />
+          <div><strong>{event.riderId}</strong><p>{event.message}</p></div>
+          <time dateTime={event.created_at}>{relativeTime(event.created_at)}</time>
+          {event.payload?.trustScore != null && <small>TRUST {event.payload.trustScore}</small>}
+        </button>) : <p className="empty-dashboard-state"><Activity /> Meaningful rider activity will appear here.</p>}
+      </div>
+    </section>
   </section>;
 }

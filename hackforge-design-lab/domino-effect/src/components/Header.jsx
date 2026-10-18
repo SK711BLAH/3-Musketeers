@@ -1,6 +1,6 @@
 import { Activity, Bike } from 'lucide-react';
 
-export const views = ['LIVE MONITOR', 'INTELLIGENCE LAB', 'REVIEW QUEUE'];
+export const views = ['LIVE MONITOR', 'INTELLIGENCE LAB', 'RIDER INSIGHTS'];
 
 export default function Header({ view, onNavigate, onRiderDemo, mode }) {
   return (
@@ -16,7 +16,7 @@ export default function Header({ view, onNavigate, onRiderDemo, mode }) {
       </nav>
       <div className="header-actions">
         <span className="system-active"><Activity /> SYSTEM ACTIVE</span>
-        <button className="rider-demo-link" onClick={onRiderDemo}><Bike /> RIDER DEMO</button>
+        <button className="rider-demo-link" onClick={onRiderDemo}><Bike /> RIDER PORTAL</button>
         <small>{mode}</small>
       </div>
     </header>

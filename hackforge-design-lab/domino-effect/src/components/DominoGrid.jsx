@@ -13,12 +13,15 @@ function seededValue(seed) {
 }
 
 function selectDemoRiders(riders) {
+  const targetCount = Math.min(8, riders.length);
   const highRisk = riders.filter(rider => rider.riskLevel === 'HIGH RISK').slice(0, 1);
-  const suspicious = riders.filter(rider => rider.riskLevel === 'SUSPICIOUS').slice(0, 1);
+  const suspicious = riders.filter(rider => rider.riskLevel === 'SUSPICIOUS').slice(0, 2);
   const chosen = new Set([...highRisk, ...suspicious].map(rider => rider.id));
   const trusted = riders.filter(rider => rider.riskLevel === 'TRUSTED' && !chosen.has(rider.id))
-    .slice(0, 7 - chosen.size);
-  const selected = [...trusted, ...suspicious, ...highRisk];
+    .slice(0, targetCount - chosen.size);
+  trusted.forEach(rider => chosen.add(rider.id));
+  const remaining = riders.filter(rider => !chosen.has(rider.id)).slice(0, targetCount - chosen.size);
+  const selected = [...trusted, ...suspicious, ...highRisk, ...remaining];
   const random = seededValue(20261018);
   return selected.sort(() => random() - .5).map(rider => rider.id);
 }
@@ -26,43 +29,32 @@ function selectDemoRiders(riders) {
 function createWorldPositions(ids) {
   const seed = ids.join('').split('').reduce((sum, character) => sum + character.charCodeAt(0), 0);
   const random = seededValue(seed);
-  const placed = [];
+  // Perspective-safe lanes prevent projected cards from obscuring one another.
+  // Small seeded offsets retain the intentionally scattered command-centre feel.
+  const slots = [
+    { x: 16, depth: 15 }, { x: 60, depth: 14 }, { x: 81, depth: 18 },
+    { x: 29, depth: 43 }, { x: 70, depth: 46 }, { x: 84, depth: 40 },
+    { x: 41, depth: 73 }, { x: 50, depth: 68 },
+  ];
 
-  ids.forEach(id => {
-    let best = null;
-    let bestScore = -Infinity;
-
-    for (let attempt = 0; attempt < 260; attempt += 1) {
-      const depth = 12 + random() * 70;
-      const horizontalSpan = 35 - depth * .2;
-      const candidate = { x: 50 + (random() * 2 - 1) * horizontalSpan, depth };
-      const distances = placed.map(point => Math.hypot(candidate.x - point.x, (candidate.depth - point.depth) * 1.35));
-      const nearest = distances.length ? Math.min(...distances) : 100;
-      const alignmentPenalty = placed.reduce((penalty, point) => {
-        if (Math.abs(candidate.x - point.x) < 8) return penalty + 12;
-        if (Math.abs(candidate.depth - point.depth) < 7) return penalty + 10;
-        return penalty;
-      }, 0);
-      const edgePenalty = candidate.depth < 20 && (candidate.x < 20 || candidate.x > 80) ? 9 : 0;
-      const score = nearest - alignmentPenalty - edgePenalty + random() * 3;
-
-      if (score > bestScore) {
-        best = candidate;
-        bestScore = score;
-      }
-    }
-
-    placed.push({ id, ...best });
-  });
-
-  return Object.fromEntries(placed.map(({ id, x, depth }) => [id, { x, depth }]));
+  return Object.fromEntries(ids.map((id, index) => {
+    const slot = slots[index % slots.length];
+    return [id, {
+      x: slot.x + (random() - .5) * 1.2,
+      depth: slot.depth + (random() - .5) * 2,
+    }];
+  }));
 }
 
 export default function DominoGrid({ riders, focusId, selectedId, onFocus, onFocusComplete }) {
   const viewport = useRef(null);
+  const dragRig = useRef(null);
   const world = useRef(null);
+  const drag = useRef({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0 });
+  const view = useRef({ x: 0, y: 0, rotateX: 0, rotateY: 0, scale: 1 });
   const onFocusCompleteRef = useRef(onFocusComplete);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [viewMoved, setViewMoved] = useState(false);
   const [gridIds] = useState(() => selectDemoRiders(riders));
   const [positions] = useState(() => createWorldPositions(gridIds));
   const visibleRiders = gridIds.map(id => riders.find(rider => rider.id === id)).filter(Boolean);
@@ -116,14 +108,56 @@ export default function DominoGrid({ riders, focusId, selectedId, onFocus, onFoc
     return () => gsap.killTweensOf(world.current);
   }, [focusId, positions]);
 
+  const moveView = next => {
+    view.current = next;
+    gsap.to(dragRig.current, { ...next, duration: .28, ease: 'power2.out', force3D: true, overwrite: 'auto' });
+  };
+
+  const pointerDown = event => {
+    if (focusId || event.button > 0) return;
+    drag.current = { active: true, moved: false, startX: event.clientX, startY: event.clientY, baseX: view.current.x, baseY: view.current.y };
+  };
+
+  const pointerMove = event => {
+    if (!drag.current.active || focusId) return;
+    const dx = event.clientX - drag.current.startX;
+    const dy = event.clientY - drag.current.startY;
+    if (!drag.current.moved && Math.hypot(dx, dy) < 6) return;
+    if (!drag.current.moved) viewport.current?.setPointerCapture?.(event.pointerId);
+    drag.current.moved = true;
+    const x = Math.max(-70, Math.min(70, drag.current.baseX + dx * .18));
+    const y = Math.max(-32, Math.min(32, drag.current.baseY + dy * .12));
+    moveView({ x, y, rotateX: Math.max(-1.4, Math.min(1.4, -dy * .012)), rotateY: Math.max(-3, Math.min(3, dx * .018)) });
+  };
+
+  const pointerUp = event => {
+    if (!drag.current.active) return;
+    drag.current.active = false;
+    if (drag.current.moved) {
+      setViewMoved(true);
+      viewport.current?.releasePointerCapture?.(event.pointerId);
+    }
+  };
+
+  const resetView = () => {
+    moveView({ x: 0, y: 0, rotateX: 0, rotateY: 0, scale: 1 });
+    setViewMoved(false);
+  };
+
+  const zoomView = direction => {
+    const scale = Math.max(.88, Math.min(1.15, (view.current.scale ?? 1) + direction * .07));
+    moveView({ ...view.current, scale });
+    setViewMoved(Math.abs(scale - 1) > .01 || view.current.x !== 0 || view.current.y !== 0);
+  };
+
   return <section className={`domino-scene ${focusId ? 'has-selection' : ''}`} aria-label="Live rider identity map">
     <div className="scene-heading">
       <div><span>REPRESENTATIVE ACTIVE IDENTITIES / 3D LIVE SIMULATION</span><h2>CONTINUITY MAP</h2></div>
       <div className="domino-legend"><span className="blue">TRUSTED</span><span className="yellow">SUSPICIOUS</span><span className="red">HIGH RISK</span></div>
     </div>
-    <div className="domino-viewport" ref={viewport}>
+    <div className={`domino-viewport ${focusId ? 'camera-locked' : ''}`} ref={viewport} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp}>
       <div className="scene-atmosphere" aria-hidden="true" />
-      <div className="scene-world" ref={world}>
+      <div className="drag-rig" ref={dragRig}><div className="scene-world" ref={world}>
         <div className="ground-plane" style={{ '--floor-tilt': `${FLOOR_TILT}deg` }}>
           <div className="grid-surface" aria-hidden="true" />
           {visibleRiders.map(rider => {
@@ -138,6 +172,7 @@ export default function DominoGrid({ riders, focusId, selectedId, onFocus, onFoc
               <button
                 className={`rider-domino domino-piece ${tone} ${focusId === rider.id ? 'selected' : ''}`}
                 data-rider-id={rider.id}
+                onPointerDown={event => { event.stopPropagation(); onFocus(rider.id); }}
                 onClick={() => onFocus(rider.id)}
                 aria-label={`${rider.id}, ${rider.riskLevel}, ${rider.identityConfidence}% identity confidence`}
               >
@@ -146,6 +181,12 @@ export default function DominoGrid({ riders, focusId, selectedId, onFocus, onFoc
             </div>;
           })}
         </div>
+      </div></div>
+      <div className="view-controls" onPointerDown={event => event.stopPropagation()}>
+        <span>DRAG / ZOOM VIEW</span>
+        <button type="button" aria-label="Zoom out" onClick={() => zoomView(-1)} disabled={Boolean(focusId)}>−</button>
+        <button type="button" aria-label="Zoom in" onClick={() => zoomView(1)} disabled={Boolean(focusId)}>+</button>
+        {viewMoved && !focusId && <button type="button" onClick={resetView}>RESET VIEW</button>}
       </div>
       <div className={`identity-lock ${focusId ? 'visible' : ''}`} aria-live="polite">
         <span>{isTransitioning ? 'CAMERA ACQUIRING' : selectedId ? 'IDENTITY LOCKED' : 'CAMERA READY'}</span><b>{focusId}</b>

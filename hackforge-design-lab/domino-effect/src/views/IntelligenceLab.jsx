@@ -1,76 +1,56 @@
-import { useState } from 'react';
-import { CheckCircle2, ChevronRight, FlaskConical, ShieldAlert } from 'lucide-react';
+import { useMemo } from 'react';
+import { Activity, BrainCircuit } from 'lucide-react';
+import SelectMenu from '../components/SelectMenu';
 
-const signalLabels = ['SHIFT TIMING', 'DEVICE FAMILIARITY', 'TAP CADENCE', 'DELIVERY SEQUENCE', 'SESSION ACTIVITY'];
+const statusLabel = rider => ({
+  HUMAN_REVIEW: 'REVIEW REQUIRED',
+  VERIFICATION_REQUIRED: 'VERIFYING',
+  OBSERVING: 'OBSERVING',
+  TRUSTED: 'TRUSTED',
+}[rider.state] ?? rider.state);
 
-export default function IntelligenceLab({ riders, selectedId, onSelect, onVerified }) {
+function decisionFor(rider) {
+  if (rider.state === 'HUMAN_REVIEW') return { title: 'POSSIBLE ACCOUNT SHARING', tone: 'risk', action: 'Escalate for human review.', outcome: 'Case added to Needs Attention.' };
+  if (rider.handoffAssessment?.riskScore >= 50 && rider.verificationRequired) return { title: 'POSSIBLE IDENTITY HANDOFF', tone: 'risk', action: 'Request face verification.', outcome: 'Independent session, device, location, and behaviour evidence is being reassessed.' };
+  if (rider.state === 'VERIFICATION_REQUIRED') return { title: 'IDENTITY UNCERTAIN', tone: 'watch', action: 'Request face verification.', outcome: 'Verification initiated automatically.' };
+  if (rider.verificationStatus === 'PASSED') return { title: 'VERIFICATION CONFIRMED', tone: 'good', action: 'Resume monitored activity.', outcome: 'Verification resolved automatically; monitoring remains active.' };
+  if (rider.state === 'OBSERVING') return { title: 'CHANGE UNDER OBSERVATION', tone: 'watch', action: 'Increase observation.', outcome: 'No human intervention required at this stage.' };
+  return { title: 'CONTINUITY CONFIRMED', tone: 'good', action: 'Continue monitoring.', outcome: 'No intervention required.' };
+}
+
+export default function IntelligenceLab({ riders, events, selectedId, onSelect }) {
   const rider = riders.find(item => item.id === selectedId) ?? riders[0];
-  const [point, setPoint] = useState(rider.confidenceTimeline.length - 1);
-  const timeline = rider.confidenceTimeline;
-  const points = timeline.map((value, index) => ({
-    value,
-    x: timeline.length === 1 ? 50 : 7 + index * (86 / (timeline.length - 1)),
-    y: 92 - value * .72,
-    event: rider.eventHistory[index] ?? rider.lastEvent,
-  }));
-  const path = points.map((item, index) => `${index ? 'L' : 'M'} ${item.x} ${item.y}`).join(' ');
-  const consistency = rider.behavioralMatch;
-  return <main className="page intelligence-page">
-    <section className="page-hero lab-hero">
-      <div><span>EXPLAINABLE IDENTITY AUTOMATION</span><h1>INTELLIGENCE <i>LAB.</i></h1><p>See why StillYou? changed an identity confidence score—and what it did next.</p></div>
-      <label className="rider-selector">SELECT RIDER<select value={rider.id} onChange={event => { onSelect(event.target.value); setPoint(0); }}>{riders.map(item => <option value={item.id} key={item.id}>{item.id} / {item.name}</option>)}</select></label>
+  const decision = decisionFor(rider);
+  const detection = rider.evidence.length
+    ? rider.evidence.slice(0, 3).map(item => item.change).join('. ')
+    : 'Recent behaviour and device signals remain within the established rider baseline.';
+  const riderEvents = useMemo(() => events.filter(event => event.riderId === rider.id).slice(-5).reverse(), [events, rider.id]);
+  return <main className="page intelligence-page simplified-lab">
+    <section className="lab-titlebar">
+      <div><span>EXPLAINABLE IDENTITY AUTOMATION</span><h1>INTELLIGENCE <i>LAB.</i></h1></div>
+      <SelectMenu label="SELECT RIDER" value={rider.id} onChange={onSelect} options={riders.map(item => ({ value: item.id, label: `${item.id} / ${item.name}` }))} />
     </section>
 
-    <section className="lab-summary">
-      <div><span>RIDER</span><b>{rider.id}</b></div><div><span>IDENTITY CONFIDENCE</span><b>{rider.identityConfidence}%</b></div>
-      <div><span>BASELINE</span><b>{rider.baselineMaturity}</b></div><div><span>DEVICE</span><b>{rider.device}</b></div><div><span>CLASSIFICATION</span><b>{rider.riskLevel}</b></div>
+    <section className={`driver-intelligence ${decision.tone}`} aria-label="Driver intelligence">
+      <div><span>RIDER IDENTITY</span><b>{rider.name}</b><small>{rider.id}</small></div>
+      <div><span>IDENTITY CONFIDENCE</span><b>{rider.identityConfidence}% <small>CONFIDENCE</small></b></div>
+      <div><span>CURRENT STATUS</span><strong>{statusLabel(rider)}</strong></div>
     </section>
 
-    <section className="lab-grid">
-      <article className="fingerprint-card">
-        <header><span>BEHAVIOURAL FINGERPRINT</span><h2>BASELINE VS CURRENT</h2></header>
-        <div className="comparison-head"><span>SIGNAL</span><span>BASELINE</span><span>CURRENT</span></div>
-        {signalLabels.map((label, index) => <div className="signal-row" key={label}>
-          <b>{label}</b><div><i style={{ width: `${rider.baseline[index]}%` }} /><small>{rider.baseline[index]}%</small></div>
-          <div><i className="current" style={{ width: `${rider.observed[index]}%` }} /><small>{rider.observed[index]}%</small></div>
-        </div>)}
-        <strong className="consistency-score">BEHAVIOURAL CONSISTENCY <b>{consistency}%</b></strong>
-      </article>
-
-      <article className="insight-card">
-        <FlaskConical /><span>STILLYOU? INSIGHT</span><h2>{rider.riskLevel === 'TRUSTED' ? 'CONTINUITY CONFIRMED.' : 'IDENTITY CHANGE DETECTED.'}</h2>
-        <p>{rider.riskLevel === 'TRUSTED'
-          ? `${rider.id} is behaving consistently with the established baseline. The session can continue without interruption.`
-          : `${rider.id} is showing ${rider.anomalies.length} explainable deviation signal${rider.anomalies.length === 1 ? '' : 's'}. Identity confidence is now ${rider.identityConfidence}%.`}</p>
-        <dl><div><dt>AUTOMATIC RESPONSE</dt><dd>{rider.automatedAction}</dd></div><div><dt>CURRENT STATUS</dt><dd>{rider.verificationStatus}</dd></div></dl>
-        <small>Deterministic rules · No AI model or fraud probability claim</small>
-      </article>
+    <section className={`ai-decision ${decision.tone}`}>
+      <header><BrainCircuit /><div><span>AI + POLICY DECISION</span><h2>{decision.title}</h2></div></header>
+      <div className="decision-explanation"><span>WHAT DID THE AI DETECT?</span><p>{detection}</p><span>WHY WAS IT SUSPICIOUS?</span><p>{rider.evidence.length ? rider.evidence.slice(0, 2).map(item => item.unusual || item.change).join(' ') : 'No meaningful deviation from this rider’s established pattern was found.'}</p></div>
+      <div className="decision-result"><span>WHAT ACTION DID THE SYSTEM TAKE?</span><strong>{decision.action}</strong><p>{decision.outcome}</p>{rider.handoffAssessment && <small>HANDOFF RISK {rider.handoffAssessment.riskScore}/100 · DATA {rider.handoffAssessment.dataSufficiency}</small>}</div>
+      <small>Isolation Forest supplies anomaly evidence. The policy engine executes the displayed action and records it in the audit history.</small>
     </section>
 
-    <section className="timeline-card">
-      <header><div><span>SESSION EVENTS / TRACEABLE SCORE</span><h2>IDENTITY CONFIDENCE TIMELINE</h2></div><b>{timeline.join(' → ')}</b></header>
-      <svg viewBox="0 0 100 100" role="img" aria-label="Identity confidence timeline">
-        <path d={path} />
-        {points.map((item, index) => <g key={index} onClick={() => setPoint(index)} role="button" tabIndex="0">
-          <circle className={point === index ? 'selected' : ''} cx={item.x} cy={item.y} r="2.8" /><text x={item.x} y={item.y - 6}>{item.value}</text>
-        </g>)}
-      </svg>
-      <div className="timeline-detail"><b>EVENT {String(point + 1).padStart(2, '0')}</b><p>{points[point]?.event}</p><strong>{point ? `${timeline[point] - timeline[point - 1]} confidence points` : 'Starting confidence'}</strong></div>
-    </section>
+    <details className="automation-activity" open>
+      <summary><Activity /><span>AUTOMATION ACTIVITY</span><small>{riderEvents.length} RECENT ACTIONS</small></summary>
+      <div>{riderEvents.length ? riderEvents.map(event => {
+        const simulated = event.event_key?.startsWith('scenario-') || event.event_key?.startsWith('demo-') || event.payload?.method?.startsWith('SIMULATED');
+        return <article key={event.id}><time>{event.time}</time><p>{event.message}</p>{simulated && <b>SIMULATION</b>}</article>;
+      }) : <p className="empty-activity">No meaningful actions recorded for this rider yet.</p>}</div>
+    </details>
 
-    <section className="recovery-card">
-      <div><CheckCircle2 /><span>TRUST RECOVERY</span><h2>VERIFICATION RESTORES CONFIDENCE—NOT CERTAINTY.</h2><p>A successful simulated check adds 50 points from a high-risk state, capped at 88 until subsequent behaviour confirms continuity.</p></div>
-      <div className="recovery-flow"><b>96</b><ChevronRight /><b>74</b><ChevronRight /><b className="danger">38</b><ChevronRight /><b className="restored">88</b></div>
-      {rider.verificationStatus === 'Requested' && <button onClick={() => onVerified(rider.id)}><ShieldAlert /> COMPLETE SIMULATED VERIFICATION</button>}
-    </section>
-    <section className="decision-engine-card">
-      <header><span>AUTOMATED DECISION ENGINE / CONFIGURABLE PROTOTYPE POLICY</span><h2>THE SYSTEM INVESTIGATES. HUMANS INTERVENE ONLY WHEN NECESSARY.</h2></header>
-      <div className="decision-bands">
-        <article className="trusted"><b>80–100</b><strong>TRUSTED</strong><p>Continue the session normally.</p></article>
-        <article className="watch"><b>50–79</b><strong>SUSPICIOUS</strong><p>Increase monitoring without blocking.</p></article>
-        <article className="risk"><b>0–49</b><strong>HIGH RISK</strong><p>Trigger verification; review unresolved cases.</p></article>
-      </div>
-      <p>Current decision: <b>{rider.identityConfidence}% → {rider.automatedAction}</b>. These bands demonstrate policy mechanics and are not validated fraud probabilities.</p>
-    </section>
   </main>;
 }

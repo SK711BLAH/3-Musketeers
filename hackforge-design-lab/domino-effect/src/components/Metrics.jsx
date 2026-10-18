@@ -1,19 +1,14 @@
-export default function Metrics({ riders }) {
-  const active = riders.length;
-  const trusted = riders.filter(rider => rider.riskLevel === 'TRUSTED').length;
-  const suspicious = riders.filter(rider => rider.riskLevel === 'SUSPICIOUS').length;
-  const highRisk = riders.filter(rider => rider.riskLevel === 'HIGH RISK').length;
-  const average = active
-    ? Math.round(riders.reduce((sum, rider) => sum + rider.identityConfidence, 0) / active)
-    : 0;
+export default function Metrics({ stats, connectionStatus }) {
   const primary = [
-    ['ACTIVE RIDERS', active, 'neutral'],
-    ['TRUSTED', trusted, 'trusted'],
-    ['SUSPICIOUS', suspicious, 'watch'],
-    ['HIGH RISK', highRisk, 'risk'],
+    ['ACTIVE RIDERS', stats?.activeRiders ?? 0, 'neutral'],
+    ['AVERAGE TRUST SCORE', stats?.averageTrust ?? 0, 'trusted'],
+    ['ELEVATED RISK', stats?.elevatedRisk ?? 0, 'watch'],
+    ['PENDING VERIFICATIONS', stats?.pendingVerifications ?? 0, 'neutral'],
   ];
-  return <section className="metric-grid" aria-label="Live rider statistics">
-    {primary.map(([label, value, tone]) => <article className={tone} key={label}><b>{value}</b><span>{label}</span></article>)}
-    <small>AVERAGE IDENTITY CONFIDENCE · {average}%</small>
+  return <section className="engine-summary" aria-label="Still Engine automation status">
+    <div className={`engine-connection ${connectionStatus.toLowerCase()}`}><i /><span>STILL ENGINE — {connectionStatus === 'CONNECTED' ? 'ACTIVE' : connectionStatus}</span></div>
+    <div className="metric-grid">
+      {primary.map(([label, value, tone]) => <article className={tone} key={label}><b>{value}</b><span>{label}</span></article>)}
+    </div>
   </section>;
 }
