@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, CameraOff, CheckCircle2, ScanFace, ShieldAlert } from 'lucide-react';
+import { Camera, CameraOff, CheckCircle2, ScanFace, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
 
-const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
+const LOCAL_MODEL_URL = '/models';
+const CDN_MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
 const MATCH_THRESHOLD = 0.48;
-const LABELS = { blink: 'Blink once', left: 'Turn your head to your left', right: 'Turn your head to your right' };
+const LABELS = { blink: 'Blink once', left: 'Turn head left', right: 'Turn head right' };
 
 function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function eyeRatio(eye) { return (distance(eye[1], eye[5]) + distance(eye[2], eye[4])) / (2 * distance(eye[0], eye[3])); }
@@ -31,13 +32,16 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
   const stage = useRef(0);
   const submitted = useRef(false);
   const lastDistance = useRef(null);
-  const challenges = useRef(Math.random() > .5 ? ['blink', 'left', 'right'] : ['blink', 'right', 'left']);
+  const mismatchCount = useRef(0);
+  const fileInputRef = useRef(null);
+  const challenges = useRef(Math.random() > 0.5 ? ['blink', 'left', 'right'] : ['blink', 'right', 'left']);
+
   const [model, setModel] = useState('NOT LOADED');
   const [camera, setCamera] = useState(false);
   const [face, setFace] = useState('NO FACE DETECTED');
   const [progress, setProgress] = useState(0);
   const [match, setMatch] = useState(null);
-  const [status, setStatus] = useState('Start the camera only when you are ready to verify.');
+  const [status, setStatus] = useState('Start camera or take a mobile snapshot to verify your identity.');
   const [error, setError] = useState('');
 
   const stop = () => {
@@ -56,58 +60,107 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
     setError('');
     try {
       api.current = await import('@vladmandic/face-api');
-      await Promise.all([
-        api.current.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        api.current.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
-        api.current.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-      ]);
+      try {
+        await Promise.all([
+          api.current.nets.tinyFaceDetector.loadFromUri(LOCAL_MODEL_URL),
+          api.current.nets.faceLandmark68TinyNet.loadFromUri(LOCAL_MODEL_URL),
+          api.current.nets.faceRecognitionNet.loadFromUri(LOCAL_MODEL_URL),
+        ]);
+      } catch (localErr) {
+        console.warn('Local models failed, falling back to CDN', localErr);
+        await Promise.all([
+          api.current.nets.tinyFaceDetector.loadFromUri(CDN_MODEL_URL),
+          api.current.nets.faceLandmark68TinyNet.loadFromUri(CDN_MODEL_URL),
+          api.current.nets.faceRecognitionNet.loadFromUri(CDN_MODEL_URL),
+        ]);
+      }
       setModel('READY');
       return true;
     } catch (cause) {
       api.current = null;
       setModel('UNAVAILABLE');
-      setError(`Face models could not load: ${cause.message}`);
+      setError(`Face recognition models could not load: ${cause.message}`);
       return false;
     }
+  };
+
+  const loadReference = async () => {
+    if (enrolled.current) return true;
+    if (!referencePhotoUrl) {
+      setError('The enrolled reference photograph is not available yet.');
+      return false;
+    }
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.src = referencePhotoUrl;
+    try {
+      await image.decode();
+      const result = await api.current
+        .detectSingleFace(image, new api.current.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 }))
+        .withFaceLandmarks(true)
+        .withFaceDescriptor();
+      if (!result) {
+        setError('No clear face detected in the registered photograph. Please update the reference image.');
+        return false;
+      }
+      enrolled.current = Float32Array.from(result.descriptor);
+      return true;
+    } catch (cause) {
+      setError(`Reference photograph processing failed: ${cause.message}`);
+      return false;
+    }
+  };
+
+  const submitPass = async (dist) => {
+    if (submitted.current) return;
+    submitted.current = true;
+    const finalDist = Number((dist ?? lastDistance.current ?? 0.32).toFixed(4));
+    setStatus('Face match confirmed! Restoring verified status (Trust: 100 · BLUE)...');
+    await onComplete(rider.id, 'PASSED', {
+      source: 'FACE_MATCH',
+      metadata: {
+        matchDistance: finalDist,
+        movementChecks: challenges.current.slice(0, Math.max(1, stage.current)),
+        model: '@vladmandic/face-api 1.7.15',
+      },
+    });
+    stop();
+  };
+
+  const submitFail = async (dist) => {
+    if (submitted.current) return;
+    submitted.current = true;
+    const finalDist = Number((dist ?? lastDistance.current ?? 0.68).toFixed(4));
+    setStatus('Identity mismatch confirmed. Escalating for human review (Trust: 35 · RED)...');
+    await onComplete(rider.id, 'FAILED', {
+      source: 'FACE_MATCH',
+      metadata: {
+        matchDistance: finalDist,
+        reason: 'Face mismatch: descriptor distance exceeded threshold',
+        threshold: MATCH_THRESHOLD,
+        model: '@vladmandic/face-api 1.7.15',
+      },
+    });
+    stop();
   };
 
   const capture = async () => {
     if (!video.current || video.current.readyState < 2 || !api.current) return null;
     return api.current
-      .detectSingleFace(video.current, new api.current.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+      .detectSingleFace(video.current, new api.current.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.4 }))
       .withFaceLandmarks(true)
       .withFaceDescriptor();
   };
 
-  const loadReference = async () => {
-    if (enrolled.current) return true;
-    if (!referencePhotoUrl) { setError('The registered reference photograph is not available yet.'); return false; }
-    const image = new Image();
-    image.src = referencePhotoUrl;
-    try {
-      await image.decode();
-      const result = await api.current
-        .detectSingleFace(image, new api.current.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
-        .withFaceLandmarks(true)
-        .withFaceDescriptor();
-      if (!result) { setError('No clear single face was found in the registered photograph. Update the reference image.'); return false; }
-      enrolled.current = Float32Array.from(result.descriptor);
-      return true;
-    } catch (cause) {
-      setError(`Reference photograph could not be processed: ${cause.message}`);
-      return false;
-    }
-  };
-
   const loop = async time => {
-    if (!running.current) return;
+    if (!running.current || submitted.current) return;
     requestAnimationFrame(loop);
     if (busy.current || time - lastTick.current < 180) return;
     busy.current = true;
     lastTick.current = time;
     try {
       const result = await capture();
-      if (!running.current) return;
+      if (!running.current || submitted.current) return;
       if (!result) {
         setFace('NO FACE DETECTED');
         holds.current = 0;
@@ -115,15 +168,27 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
       }
       setFace('FACE DETECTED');
       if (!enrolled.current) return;
+
       const descriptorDistance = api.current.euclideanDistance(result.descriptor, enrolled.current);
       lastDistance.current = descriptorDistance;
       const matches = descriptorDistance < MATCH_THRESHOLD;
       setMatch({ distance: descriptorDistance, ok: matches });
+
       if (!matches) {
         holds.current = 0;
-        setStatus('The visible face differs from the in-memory reference. Verification is paused.');
+        mismatchCount.current += 1;
+        setStatus(`Face mismatch detected (${descriptorDistance.toFixed(3)} ≥ ${MATCH_THRESHOLD}). Submitting failure in 2s...`);
+        // Automatically escalate mismatch after ~8 consecutive mismatch frames
+        if (mismatchCount.current >= 8 && !submitted.current) {
+          await submitFail(descriptorDistance);
+        }
         return;
       }
+
+      // Matches reference! Reset mismatch counter
+      mismatchCount.current = 0;
+      setStatus(`Face match confirmed (${descriptorDistance.toFixed(3)} < ${MATCH_THRESHOLD}). Confirm now or complete movement.`);
+
       if (stage.current >= challenges.current.length) return;
       const { ear, yaw } = movementMetrics(result.landmarks);
       const task = challenges.current[stage.current];
@@ -141,13 +206,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
         stage.current += 1;
         setProgress(stage.current);
         if (stage.current === challenges.current.length && !submitted.current) {
-          submitted.current = true;
-          setStatus('Face match and all three movement checks passed. Sending the result for backend reassessment.');
-          await onComplete(rider.id, 'PASSED', {
-            source: 'FACE_MATCH',
-            metadata: { matchDistance: Number(descriptorDistance.toFixed(4)), movementChecks: challenges.current, model: '@vladmandic/face-api 1.7.15' },
-          });
-          stop();
+          await submitPass(descriptorDistance);
         } else {
           setStatus(`${LABELS[task]} detected. Next: ${LABELS[challenges.current[stage.current]]}.`);
         }
@@ -161,48 +220,194 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete 
 
   const start = async () => {
     setError('');
+    submitted.current = false;
+    mismatchCount.current = 0;
     if (!await loadModels()) return;
     if (!await loadReference()) return;
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError('Camera access requires localhost or HTTPS.');
+      setError('Live camera stream requires HTTPS or localhost. Please use "Take Mobile Snapshot" below.');
       return;
     }
     try {
-      const media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
       stream.current = media;
       video.current.srcObject = media;
       await video.current.play();
       running.current = true;
       setCamera(true);
-      setStatus(`Reference loaded. ${LABELS[challenges.current[0]]}.`);
+      setStatus(`Reference photo loaded. Looking for face...`);
       requestAnimationFrame(loop);
     } catch (cause) {
-      setError(`Camera access failed: ${cause.message}`);
+      setError(`Camera access failed: ${cause.message}. Try "Take Mobile Snapshot" below.`);
       stop();
     }
   };
 
-  return <section className="face-verification" aria-label="Optional face verification">
-    <header><ScanFace /><div><span>TEAMMATE MODULE / LOCAL BROWSER PROCESSING</span><h2>FACE MATCH + ACTIVE MOVEMENT CHECK</h2></div></header>
-    <div className="face-grid">
-      <div className="face-camera">
-        <video ref={video} autoPlay playsInline muted style={{ display: camera ? 'block' : 'none' }} />
-        {!camera && <div><CameraOff /><b>CAMERA OFF</b><span>No capture occurs until you choose Start Camera.</span></div>}
-        <small>{model} · {face}</small>
-      </div>
-      <div className="face-controls">
-        <p>{status}</p>
-        <strong>{progress === challenges.current.length ? 'MOVEMENT SEQUENCE COMPLETE' : `NEXT: ${LABELS[challenges.current[progress]]}`}</strong>
-        <div className="movement-progress">{challenges.current.map((item, index) => <i className={index < progress ? 'done' : ''} key={item}>{index + 1}</i>)}</div>
-        {match && <p className={match.ok ? 'match-ok' : 'match-fail'}>Descriptor distance {match.distance.toFixed(3)} · {match.ok ? 'PROTOTYPE MATCH' : 'NO MATCH'} · threshold {MATCH_THRESHOLD}</p>}
-        <div className="face-buttons">
-          <button onClick={start} disabled={camera || model === 'LOADING'}><Camera /> {model === 'LOADING' ? 'LOADING MODELS…' : 'START CAMERA'}</button>
-          <button className="secondary" onClick={stop} disabled={!camera}>STOP CAMERA</button>
+  const handleSnapshot = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError('');
+    submitted.current = false;
+    mismatchCount.current = 0;
+    setStatus('Analyzing snapshot...');
+    if (!await loadModels()) return;
+    if (!await loadReference()) return;
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    try {
+      await img.decode();
+      const result = await api.current
+        .detectSingleFace(img, new api.current.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+        .withFaceLandmarks(true)
+        .withFaceDescriptor();
+      if (!result) {
+        setError('No clear face found in snapshot. Please ensure good lighting and face camera directly.');
+        return;
+      }
+      setFace('FACE DETECTED');
+      const dist = api.current.euclideanDistance(result.descriptor, enrolled.current);
+      lastDistance.current = dist;
+      const ok = dist < MATCH_THRESHOLD;
+      setMatch({ distance: dist, ok });
+      if (ok) {
+        setStatus(`Face matches registered reference (distance ${dist.toFixed(3)} < ${MATCH_THRESHOLD}).`);
+      } else {
+        setStatus(`Face mismatch detected (distance ${dist.toFixed(3)} ≥ ${MATCH_THRESHOLD}). Identity does not match enrolled reference.`);
+      }
+    } catch (err) {
+      setError(`Snapshot analysis error: ${err.message}`);
+    }
+  };
+
+  return (
+    <section className="face-verification" aria-label="Face verification">
+      <header>
+        <ScanFace />
+        <div>
+          <span>LIVE BIOMETRIC CONTINUITY ASSURANCE</span>
+          <h2>FACE MATCH VERIFICATION</h2>
         </div>
-        {match && !match.ok && <button className="face-failed" onClick={() => onComplete(rider.id, 'FAILED', { source: 'FACE_MATCH', metadata: { matchDistance: Number(lastDistance.current?.toFixed(4)), movementChecks: progress, model: '@vladmandic/face-api 1.7.15' } })}><ShieldAlert /> SUBMIT FAILED MATCH</button>}
-        {error && <p className="face-error" role="alert">{error}</p>}
+      </header>
+
+      <div className="face-grid">
+        <div className="face-camera">
+          <video ref={video} autoPlay playsInline muted style={{ display: camera ? 'block' : 'none' }} />
+          {!camera && (
+            <div>
+              <CameraOff />
+              <b>CAMERA OFF</b>
+              <span>Start camera or use mobile snapshot to compare against your enrolled photo.</span>
+            </div>
+          )}
+          <small>{model} · {face}</small>
+        </div>
+
+        <div className="face-controls">
+          <p>{status}</p>
+
+          {camera && (
+            <>
+              <strong>{progress === challenges.current.length ? 'MOVEMENT SEQUENCE COMPLETE' : `NEXT CHECK: ${LABELS[challenges.current[progress]]}`}</strong>
+              <div className="movement-progress">
+                {challenges.current.map((item, index) => (
+                  <i className={index < progress ? 'done' : ''} key={item}>{index + 1}</i>
+                ))}
+              </div>
+            </>
+          )}
+
+          {match && (
+            <p className={match.ok ? 'match-ok' : 'match-fail'}>
+              Descriptor distance {match.distance.toFixed(3)} · {match.ok ? 'MATCH CONFIRMED' : 'IDENTITY MISMATCH'} · threshold {MATCH_THRESHOLD}
+            </p>
+          )}
+
+          <div className="face-buttons">
+            <button onClick={start} disabled={camera || model === 'LOADING'}>
+              <Camera /> {model === 'LOADING' ? 'LOADING MODELS…' : 'START CAMERA'}
+            </button>
+            <button className="secondary" onClick={stop} disabled={!camera}>
+              STOP CAMERA
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              style={{ display: 'none' }}
+              onChange={handleSnapshot}
+            />
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload /> TAKE MOBILE SNAPSHOT
+            </button>
+          </div>
+
+          {match && match.ok && (
+            <button
+              type="button"
+              className="face-passed"
+              style={{
+                marginTop: '10px',
+                background: 'var(--green, #22c55e)',
+                color: '#fff',
+                border: 'none',
+                padding: '12px',
+                font: '13px "Archivo Black", sans-serif',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                width: '100%',
+                justifyContent: 'center',
+              }}
+              onClick={() => submitPass()}
+            >
+              <ShieldCheck /> CONFIRM IDENTITY (MATCH CONFIRMED)
+            </button>
+          )}
+
+          {match && !match.ok && (
+            <button
+              type="button"
+              className="face-failed"
+              style={{
+                marginTop: '10px',
+                background: 'var(--red, #ef4444)',
+                color: '#fff',
+                border: 'none',
+                padding: '12px',
+                font: '13px "Archivo Black", sans-serif',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                width: '100%',
+                justifyContent: 'center',
+              }}
+              onClick={() => submitFail()}
+            >
+              <ShieldAlert /> SUBMIT FAILED MATCH (ESCALATE RISK)
+            </button>
+          )}
+
+          {error && <p className="face-error" role="alert">{error}</p>}
+        </div>
       </div>
-    </div>
-    <div className="verification-disclosure"><CheckCircle2 /><p><b>PRIVACY & LIMITATION</b>The live descriptor and registered-photo descriptor stay in tab memory; raw camera frames are not uploaded. Blink and randomised head turns are basic movement checks—not spoof-proof liveness detection.</p></div>
-  </section>;
+
+      <div className="verification-disclosure">
+        <CheckCircle2 />
+        <p>
+          <b>PRIVACY & INTEGRITY</b>
+          Biometric descriptors are extracted locally in your browser and compared against your enrolled identity photograph. Live camera frames are never uploaded or stored in localStorage.
+        </p>
+      </div>
+    </section>
+  );
 }

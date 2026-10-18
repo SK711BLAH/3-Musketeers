@@ -14,14 +14,18 @@ function seededValue(seed) {
 
 function selectDemoRiders(riders) {
   const targetCount = Math.min(8, riders.length);
-  const highRisk = riders.filter(rider => rider.riskLevel === 'HIGH RISK').slice(0, 1);
-  const suspicious = riders.filter(rider => rider.riskLevel === 'SUSPICIOUS').slice(0, 2);
-  const chosen = new Set([...highRisk, ...suspicious].map(rider => rider.id));
+  // Guarantee the assigned demo rider R-9001 is always placed on the Domino Continuity Map
+  const hasDemo = riders.some(r => r.id === 'R-9001');
+  const chosen = new Set(hasDemo ? ['R-9001'] : []);
+  const highRisk = riders.filter(rider => rider.riskLevel === 'HIGH RISK' && !chosen.has(rider.id)).slice(0, 1);
+  highRisk.forEach(r => chosen.add(r.id));
+  const suspicious = riders.filter(rider => rider.riskLevel === 'SUSPICIOUS' && !chosen.has(rider.id)).slice(0, 2);
+  suspicious.forEach(r => chosen.add(r.id));
   const trusted = riders.filter(rider => rider.riskLevel === 'TRUSTED' && !chosen.has(rider.id))
     .slice(0, targetCount - chosen.size);
   trusted.forEach(rider => chosen.add(rider.id));
   const remaining = riders.filter(rider => !chosen.has(rider.id)).slice(0, targetCount - chosen.size);
-  const selected = [...trusted, ...suspicious, ...highRisk, ...remaining];
+  const selected = [...riders.filter(r => chosen.has(r.id)), ...remaining];
   const random = seededValue(20261018);
   return selected.sort(() => random() - .5).map(rider => rider.id);
 }

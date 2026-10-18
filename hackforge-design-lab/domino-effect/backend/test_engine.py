@@ -30,7 +30,7 @@ class AutomationEngineTests(unittest.TestCase):
         self.assertTrue(second["challengeId"])
         with engine.db() as connection:
             rider = connection.execute("SELECT * FROM riders WHERE id='R-1042'").fetchone()
-            self.assertEqual(engine.rider_payload(connection, rider)["riskLevel"], "HIGH RISK")
+            self.assertEqual(engine.rider_payload(connection, rider)["riskLevel"], "SUSPICIOUS")
 
     def test_device_change_is_not_severe(self):
         result = engine.process_event("R-2187", "device_change", "test-device")
@@ -196,7 +196,7 @@ class AutomationEngineTests(unittest.TestCase):
             payload = engine.rider_payload(connection, rider)
         self.assertEqual(challenge["status"], "PENDING")
         self.assertTrue(payload["verificationRequired"])
-        self.assertEqual(payload["riskLevel"], "HIGH RISK")
+        self.assertEqual(payload["riskLevel"], "SUSPICIOUS")
 
     def test_account_sharing_scenario_escalates_to_review(self):
         response = engine.run_scenario(engine.ScenarioRequest(scenario="suspected_account_sharing"))
@@ -215,7 +215,9 @@ class AutomationEngineTests(unittest.TestCase):
         ))
         self.assertTrue(result["token"])
         self.assertEqual(result["rider"]["id"], "R-9001")
-        self.assertEqual(result["rider"]["baselineMaturity"], "Baseline learning")
+        self.assertEqual(result["rider"]["baselineMaturity"], "Established · 30 verified shifts")
+        self.assertEqual(result["rider"]["trustScore"], 100)
+        self.assertEqual(result["rider"]["verificationStatus"], "PASSED")
         self.assertFalse(result["rider"]["verificationRequired"])
         session = engine.session_from_authorization(f"Bearer {result['token']}")
         self.assertEqual(session["rider_id"], "R-9001")
@@ -250,7 +252,8 @@ class AutomationEngineTests(unittest.TestCase):
         with engine.db() as connection:
             account = connection.execute("SELECT * FROM rider_accounts WHERE contact='new@example.test'").fetchone()
         self.assertNotEqual(account["password_hash"], "safe-password")
-        self.assertTrue(Path(account["profile_photo_path"]).exists())
+        self.assertGreater(len(account["profile_photo_data"]), 1000)
+        self.assertEqual(account["profile_photo_mime"], "image/png")
 
     def test_delivery_actions_update_the_authoritative_rider_record(self):
         login = engine.login(engine.LoginRequest(
@@ -288,6 +291,48 @@ class AutomationEngineTests(unittest.TestCase):
         self.assertEqual(len(requested["demoCode"]), 6)
         result = engine.verify_otp(engine.OtpVerifyRequest(challenge_id=requested["challengeId"], code=requested["demoCode"]), authorization)
         self.assertIn(result["result"], {"PASSED", "PASSED_LIMITED"})
+
+    def test_real_two_device_delivery_overlap_requests_verification(self):
+        engine.reset_demo_rider()
+        phone_a = engine.login(engine.LoginRequest(
+            identifier="R-9001", password="StillYou123!",
+            device=engine.DeviceContext(device_id="phone-a", label="Phone A", browser_profile="Mobile Safari A"),
+        ))
+        auth_a = f"Bearer {phone_a['token']}"
+        engine.portal_action(engine.PortalActionRequest(action="GO_ONLINE"), auth_a)
+        engine.portal_action(engine.PortalActionRequest(action="ACCEPT_DELIVERY", order_id="ORD-4821"), auth_a)
+        phone_b = engine.login(engine.LoginRequest(
+            identifier="R-9001", password="StillYou123!",
+            device=engine.DeviceContext(device_id="phone-b", label="Phone B", browser_profile="Mobile Safari B"),
+        ))
+        auth_b = f"Bearer {phone_b['token']}"
+        result = engine.portal_action(engine.PortalActionRequest(action="ACCEPT_DELIVERY", order_id="ORD-5934"), auth_b)
+        self.assertEqual(result["rider"]["state"], "VERIFICATION_REQUIRED")
+        self.assertEqual(result["rider"]["trustScore"], 75)
+        self.assertEqual(result["rider"]["riskLevel"], "SUSPICIOUS")
+        self.assertTrue(result["rider"]["verificationRequired"])
+        self.assertTrue(any("multiple devices" in item["message"] for item in result["activity"]))
+        with self.assertRaises(engine.HTTPException) as blocked:
+            engine.portal_action(engine.PortalActionRequest(action="PICKED_UP", order_id="ORD-5934"), auth_b)
+        self.assertEqual(blocked.exception.status_code, 423)
+
+    def test_demo_reset_only_resets_demo_rider_and_preserves_active_sessions(self):
+        with engine.db() as connection:
+            other_before = connection.execute("SELECT trust_score,state FROM riders WHERE id='R-1042'").fetchone()
+        login = engine.login(engine.LoginRequest(
+            identifier="R-9001", password="StillYou123!",
+            device=engine.DeviceContext(device_id="reset-phone", label="Reset phone", browser_profile="Mobile"),
+        ))
+        engine.reset_demo_rider()
+        with engine.db() as connection:
+            demo = connection.execute("SELECT * FROM riders WHERE id='R-9001'").fetchone()
+            other_after = connection.execute("SELECT trust_score,state FROM riders WHERE id='R-1042'").fetchone()
+            reset_event = connection.execute("SELECT 1 FROM activity_events WHERE rider_id='R-9001' AND kind='demo_reset'").fetchone()
+        self.assertEqual((demo["trust_score"], demo["state"], demo["verification_status"]), (100, "TRUSTED", "PASSED"))
+        self.assertEqual(tuple(other_before), tuple(other_after))
+        self.assertTrue(reset_event)
+        session = engine.session_from_authorization(f"Bearer {login['token']}")
+        self.assertEqual(session["rider_id"], "R-9001")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,27 @@
+const getToken = () => localStorage.getItem('stillyou_rider_token') || sessionStorage.getItem('stillyou_rider_token');
+const setToken = token => {
+  if (token) {
+    try { localStorage.setItem('stillyou_rider_token', token); } catch {}
+    try { sessionStorage.setItem('stillyou_rider_token', token); } catch {}
+  }
+};
+const clearToken = () => {
+  try { localStorage.removeItem('stillyou_rider_token'); } catch {}
+  try { sessionStorage.removeItem('stillyou_rider_token'); } catch {}
+};
+
 const request = async (path, options = {}) => {
-  const token = sessionStorage.getItem('stillyou_rider_token');
+  const token = getToken();
   const response = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers ?? {}) },
     ...options,
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
+    if (response.status === 401 && token) {
+      clearToken();
+      window.dispatchEvent(new CustomEvent('stillyou:session-expired', { detail: detail.detail ?? 'Your rider session ended. Please sign in again.' }));
+    }
     throw new Error(detail.detail ?? `Backend request failed (${response.status})`);
   }
   return response.json();
@@ -95,7 +111,7 @@ class LiveBackendApi {
   }
 
   rememberSession(data) {
-    if (data?.token) sessionStorage.setItem('stillyou_rider_token', data.token);
+    if (data?.token) setToken(data.token);
     return data;
   }
 
@@ -117,15 +133,18 @@ class LiveBackendApi {
   verifyOtp(challengeId, code) { return request('/portal/otp/verify', { method: 'POST', body: JSON.stringify({ challenge_id: challengeId, code }) }); }
   updateReferencePhoto(photoData) { return request('/portal/reference-photo', { method: 'POST', body: JSON.stringify({ photo_data: photoData }) }); }
   async referencePhotoUrl() {
-    const token = sessionStorage.getItem('stillyou_rider_token');
+    const token = getToken();
     const response = await fetch('/api/portal/reference-photo', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? 'Reference photograph unavailable');
+    if (!response.ok) {
+      const errorJson = await response.json().catch(() => ({}));
+      throw new Error(errorJson.detail ?? 'Reference photograph unavailable');
+    }
     return URL.createObjectURL(await response.blob());
   }
   async logout() {
-    try { await request('/auth/logout', { method: 'POST' }); } finally { sessionStorage.removeItem('stillyou_rider_token'); }
+    try { await request('/auth/logout', { method: 'POST' }); } finally { clearToken(); }
   }
-  hasRiderSession() { return Boolean(sessionStorage.getItem('stillyou_rider_token')); }
+  hasRiderSession() { return Boolean(getToken()); }
 }
 
 export const api = new LiveBackendApi();

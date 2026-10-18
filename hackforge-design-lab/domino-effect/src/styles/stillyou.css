@@ -158,3 +158,14 @@
 @media(max-width:1050px){.dashboard-streams{grid-template-columns:1fr}.live-event-list{max-height:360px}}
 @media(max-width:900px){.live-monitor .metric-grid,.engine-summary .metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-grid article:last-child{grid-column:auto}}
 @media(max-width:560px){.live-monitor .metric-grid,.engine-summary .metric-grid{grid-template-columns:1fr}.dashboard-streams{gap:12px}.active-riders-card>header,.live-activity-card>header{align-items:flex-start}.active-riders-card header>strong{font-size:11px}.active-rider-row{min-width:720px}}
+
+/* Live two-device demo controls and always-visible identity verification. */
+.engine-connection button{margin-left:auto;border:1px solid #fff;background:transparent;color:#fff;padding:6px 9px;font:10px 'Archivo Black';letter-spacing:.4px}.engine-connection button:disabled{opacity:.55}
+.identity-verification-card{margin:0 0 16px;border:1px solid var(--blue);border-left:9px solid var(--blue);background:var(--paper);padding:18px}.identity-verification-card.required{border-color:var(--yellow);border-left-color:var(--yellow)}.identity-verification-card>header{display:flex;align-items:center;gap:12px}.identity-verification-card>header svg{width:30px;color:var(--blue)}.identity-verification-card span{font:12px 'Archivo Black';letter-spacing:1px}.identity-verification-card h2{font:21px 'Archivo Black';margin:4px 0}.identity-verification-card>p{font-size:14px}.identity-verification-card>small{display:block;margin-top:10px;font-size:12px}.identity-verification-actions{display:flex;flex-wrap:wrap;gap:8px}.identity-verification-actions button,.identity-verification-actions label{border:1px solid var(--navy);background:var(--navy);color:#fff;padding:11px 13px;font:12px 'Archivo Black';display:flex;align-items:center;gap:7px;cursor:pointer}.identity-verification-actions button:disabled{opacity:.38;cursor:not-allowed}.identity-verification-actions label{background:transparent;color:var(--navy)}.identity-verification-actions input{position:absolute;width:1px;height:1px;overflow:hidden}.identity-verification-actions svg{width:16px}
+.current-delivery button:disabled{opacity:.4;cursor:not-allowed}
+.identity-verification-card.failed{border-color:var(--red);border-left-color:var(--red)}
+.identity-verification-card.failed>header svg{color:var(--red)}
+.identity-status-badge{display:inline-block;padding:3px 8px;font:11px 'Archivo Black';letter-spacing:0.5px;border-radius:2px;margin-left:8px}
+.identity-status-badge.verified{background:#22c55e22;color:#15803d;border:1px solid #15803d}
+.identity-status-badge.required{background:#eab30822;color:#854d0e;border:1px solid #854d0e}
+.identity-status-badge.failed{background:#ef444422;color:#b91c1c;border:1px solid #b91c1c}

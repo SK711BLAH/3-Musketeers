@@ -9,6 +9,7 @@ import math
 import os
 import random
 import secrets
+import shutil
 import sqlite3
 import threading
 import urllib.error
@@ -23,7 +24,7 @@ from typing import Any, Optional
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sklearn.ensemble import IsolationForest
 
@@ -31,6 +32,10 @@ ROOT = Path(__file__).resolve().parent
 RUNTIME_ROOT = Path("/tmp/stillyou") if os.getenv("VERCEL") else ROOT
 RUNTIME_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
 DB_PATH = RUNTIME_ROOT / "stillyou.db"
+if os.getenv("VERCEL") and not DB_PATH.exists():
+    seed_db = ROOT / "stillyou.db"
+    if seed_db.exists():
+        shutil.copy2(seed_db, DB_PATH)
 UPLOADS_PATH = RUNTIME_ROOT / "uploads"
 MODEL_VERSION = "isolation-forest-2026.10.18-v1"
 SIMULATOR_INTERVAL_SECONDS = 4
@@ -95,6 +100,7 @@ CREATE TABLE IF NOT EXISTS activity_events (
 CREATE TABLE IF NOT EXISTS rider_accounts (
   rider_id TEXT PRIMARY KEY, contact TEXT UNIQUE NOT NULL, password_hash TEXT,
   password_salt TEXT, google_subject TEXT UNIQUE, profile_photo_path TEXT,
+  profile_photo_data BLOB, profile_photo_mime TEXT,
   primary_area TEXT NOT NULL, preferred_hours TEXT, created_at TEXT NOT NULL,
   FOREIGN KEY(rider_id) REFERENCES riders(id)
 );
@@ -114,7 +120,7 @@ CREATE TABLE IF NOT EXISTS recognised_devices (
 CREATE TABLE IF NOT EXISTS deliveries (
   id TEXT PRIMARY KEY, rider_id TEXT, pickup TEXT NOT NULL, dropoff TEXT NOT NULL,
   eta_minutes INTEGER NOT NULL, distance_km REAL NOT NULL, status TEXT NOT NULL,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, session_id TEXT,
   FOREIGN KEY(rider_id) REFERENCES riders(id)
 );
 CREATE TABLE IF NOT EXISTS delivery_declines (
@@ -205,13 +211,18 @@ def add_column(connection: sqlite3.Connection, table: str, definition: str) -> N
 
 def seed_demo_access(connection: sqlite3.Connection) -> None:
     demo_id = "R-9001"
-    if not connection.execute("SELECT 1 FROM riders WHERE id=?", (demo_id,)).fetchone():
+    created = not connection.execute("SELECT 1 FROM riders WHERE id=?", (demo_id,)).fetchone()
+    if created:
         profile = (demo_id, "Demo Rider", "Location not shared", "demo-browser", 720, 7.5, .80, .88)
         connection.execute(
-            "INSERT INTO riders(id,name,city,device_id,normal_start,shift_hours,acceptance,route_consistency,current_location,online_status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?)",
+            "INSERT INTO riders(id,name,city,device_id,normal_start,shift_hours,acceptance,route_consistency,current_location,online_status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?)",
             (*profile, "Location not shared", utc_now()),
         )
         seed_history(connection, profile)
+        connection.execute(
+            "UPDATE riders SET trust_score=100,state='TRUSTED',verification_status='PASSED',"
+            "last_event='Verified demo baseline established' WHERE id=?", (demo_id,),
+        )
     existing = connection.execute("SELECT * FROM rider_accounts WHERE contact='demo@stillyou.dev'").fetchone()
     if not existing or existing["rider_id"] != demo_id:
         if existing:
@@ -219,8 +230,21 @@ def seed_demo_access(connection: sqlite3.Connection) -> None:
         password_hash, salt = hash_password("StillYou123!")
         connection.execute(
             "INSERT INTO rider_accounts(rider_id,contact,password_hash,password_salt,primary_area,preferred_hours,created_at,baseline_status) VALUES(?,?,?,?,?,?,?,?)",
-            (demo_id, "demo@stillyou.dev", password_hash, salt, "Location not shared", "12:00–20:00", utc_now(), "LEARNING"),
+            (demo_id, "demo@stillyou.dev", password_hash, salt, "Location not shared", "12:00–20:00", utc_now(), "ESTABLISHED"),
         )
+    connection.execute("UPDATE rider_accounts SET baseline_status='ESTABLISHED' WHERE rider_id=?", (demo_id,))
+    
+    # Pre-seed registered reference photograph for live demonstration
+    ref_file = ROOT / "demo_reference.jpg"
+    if ref_file.exists():
+        curr_photo = connection.execute("SELECT profile_photo_data FROM rider_accounts WHERE rider_id=?", (demo_id,)).fetchone()
+        if not curr_photo or not curr_photo["profile_photo_data"]:
+            photo_bytes = ref_file.read_bytes()
+            connection.execute(
+                "UPDATE rider_accounts SET profile_photo_data=?,profile_photo_mime='image/jpeg',profile_photo_path=? WHERE rider_id=?",
+                (photo_bytes, str(ref_file), demo_id),
+            )
+            
     if not connection.execute("SELECT 1 FROM deliveries LIMIT 1").fetchone():
         now = utc_now()
         deliveries = [
@@ -256,6 +280,9 @@ def init_database(reset: bool = False) -> None:
         add_column(connection, "riders", "shift_paused_seconds INTEGER NOT NULL DEFAULT 0")
         add_column(connection, "riders", "shift_paused_at TEXT")
         add_column(connection, "rider_accounts", "baseline_status TEXT NOT NULL DEFAULT 'LEARNING'")
+        add_column(connection, "rider_accounts", "profile_photo_data BLOB")
+        add_column(connection, "rider_accounts", "profile_photo_mime TEXT")
+        add_column(connection, "deliveries", "session_id TEXT")
         # Repair records produced by older demo builds where a single normal
         # event could label a still-low score as trusted.
         connection.execute("UPDATE riders SET state='OBSERVING' WHERE state='TRUSTED' AND trust_score < ?", (TRUSTED_THRESHOLD,))
@@ -328,6 +355,53 @@ def reset_database() -> None:
     init_database()
 
 
+def reset_demo_rider(rider_id: str = "R-9001") -> None:
+    """Reset only the assigned live-demo identity while retaining active authenticated sessions."""
+    with db() as connection:
+        rider = connection.execute("SELECT * FROM riders WHERE id=?", (rider_id,)).fetchone()
+        if not rider:
+            raise ValueError("Demo rider not found")
+        now = utc_now()
+        connection.execute(
+            "UPDATE deliveries SET rider_id=NULL,session_id=NULL,status='AVAILABLE',updated_at=? WHERE (rider_id=? OR rider_id IS NULL)",
+            (now, rider_id),
+        )
+        connection.execute("DELETE FROM delivery_declines WHERE rider_id=?", (rider_id,))
+        # Preserve active rider sessions so demo phones are not logged out
+        connection.execute(
+            "UPDATE rider_sessions SET status='AUTHENTICATED',revoked_at=NULL WHERE rider_id=? AND revoked_at IS NULL",
+            (rider_id,),
+        )
+        # Keep the initial phone device as recognized and trusted; clear secondary devices so new-device anomaly fires again
+        first_device = connection.execute(
+            "SELECT id FROM recognised_devices WHERE rider_id=? ORDER BY id ASC LIMIT 1", (rider_id,)
+        ).fetchone()
+        if first_device:
+            connection.execute("DELETE FROM recognised_devices WHERE rider_id=? AND id!=?", (rider_id, first_device["id"]))
+            connection.execute("UPDATE recognised_devices SET trusted=1,last_seen_at=? WHERE id=?", (now, first_device["id"]))
+        else:
+            connection.execute("DELETE FROM recognised_devices WHERE rider_id=?", (rider_id,))
+        connection.execute("UPDATE otp_challenges SET status='EXPIRED',completed_at=? WHERE rider_id=? AND status='PENDING'", (now, rider_id))
+        connection.execute("UPDATE verification_challenges SET status='COMPLETED',result='DEMO_RESET',completed_at=? WHERE rider_id=? AND status='PENDING'", (now, rider_id))
+        connection.execute("UPDATE incidents SET status='RESOLVED',recommended_next_step='Demo rider reset to baseline by operator',updated_at=? WHERE rider_id=? AND status!='RESOLVED'", (now, rider_id))
+        connection.execute(
+            "UPDATE riders SET trust_score=100,state='TRUSTED',verification_status='PASSED',pending_verification_id=NULL,"
+            "last_event='Demo baseline active — System normal',online_status=1,paused=0,shift_started_at=?,shift_paused_seconds=0,"
+            "shift_paused_at=NULL,deliveries_accepted=0,deliveries_completed=0,updated_at=? WHERE id=?",
+            (now, now, rider_id),
+        )
+        connection.execute("UPDATE rider_accounts SET baseline_status='ESTABLISHED' WHERE rider_id=?", (rider_id,))
+        event_id = emit_event(
+            connection, f"demo-rider-reset-{uuid4().hex[:12]}", rider_id,
+            "Demo rider reset to verified baseline (Trust: 100 · BLUE)", "trusted", "demo_reset",
+            payload={"action": "RESET_DEMO_RIDER", "trustScore": 100, "riskSeverity": "TRUSTED", "verificationStatus": "PASSED"},
+        )
+        connection.execute(
+            "INSERT INTO decisions(event_id,incident_id,rider_id,created_at,previous_state,new_state,action,explanation,model_version,trust_score) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (event_id, None, rider_id, now, rider["state"], "TRUSTED", "RESET_DEMO_RIDER", "Operator reset the assigned demo rider to baseline. Connected phone sessions remain authenticated.", MODEL_VERSION, 100),
+        )
+
+
 def seed_history(connection: sqlite3.Connection, rider: tuple) -> None:
     rider_id, _, _, _, start, hours, acceptance, route = rider
     local = random.Random(sum(map(ord, rider_id)))
@@ -390,6 +464,9 @@ def scenario_features(rider: sqlite3.Row, event_type: str, sequence: int = 0) ->
 
 def evidence_for(rider: sqlite3.Row, features: dict, event_type: str, score: float, anomalous: bool) -> list[dict]:
     evidence = []
+    if event_type == "account_sharing":
+        evidence.append({"signal": "account_sharing", "change": "Account activity detected from multiple devices", "unusual": "New device identified during an active delivery", "weight": "critical"})
+        evidence.append({"signal": "policy", "change": "Identity re-verification required", "unusual": "Suspicious simultaneous activity detected across separate devices", "weight": "action"})
     if not features["device_known"]:
         evidence.append({"signal": "device", "change": "Previously unseen device", "unusual": "Context only", "weight": "low"})
     shift_delta = abs(float(features["login_minute"]) - rider["normal_start"])
@@ -435,17 +512,17 @@ def process_event(rider_id: str, event_type: str, event_key: str | None = None) 
 
         previous = rider["state"]
         if event_type == "normal":
-            trust = min(96, rider["trust_score"] + 3)
+            trust = min(100, rider["trust_score"] + 3)
             state = "TRUSTED" if trust >= TRUSTED_THRESHOLD else "OBSERVING"
             action = "CONTINUE_MONITORING" if state == "TRUSTED" else "INCREASE_OBSERVATION"
         elif event_type in {"device_change", "shift_change"}:
-            trust, state, action = max(0, min(76, rider["trust_score"] - 10)), "OBSERVING", "INCREASE_OBSERVATION"
+            trust, state, action = max(0, min(90, rider["trust_score"] - 10)), "OBSERVING", "INCREASE_OBSERVATION"
         elif event_type == "route_change":
             trust, state, action = max(0, min(64, rider["trust_score"] - 16)), "OBSERVING", "INCREASE_OBSERVATION"
         elif persistent_count < 2:
-            trust, state, action = max(0, min(66, rider["trust_score"] - 12)), "OBSERVING", "INCREASE_OBSERVATION"
+            trust, state, action = max(0, min(85, rider["trust_score"] - 15)), "OBSERVING", "INCREASE_OBSERVATION"
         else:
-            trust, state, action = min(rider["trust_score"], max(28, 52 - persistent_count * 7)), "VERIFICATION_REQUIRED", "REQUEST_VERIFICATION"
+            trust, state, action = min(rider["trust_score"], 75), "VERIFICATION_REQUIRED", "REQUEST_VERIFICATION"
 
         # Hysteresis: passive activity cannot clear an unresolved challenge or a
         # human-review hold. Only verification/review endpoints may do that.
@@ -460,12 +537,17 @@ def process_event(rider_id: str, event_type: str, event_key: str | None = None) 
             existing = connection.execute("SELECT * FROM incidents WHERE rider_id=? AND status IN ('OPEN','VERIFYING') ORDER BY created_at DESC LIMIT 1", (rider_id,)).fetchone()
             incident_id = existing["id"] if existing else f"INC-{rider_id}-{uuid4().hex[:10]}"
             second_signature = persistent_count >= 3
-            reason = "Potential second behavioural signature detected" if second_signature else "Repeated multivariate behavioural anomaly"
+            if event_type == "account_sharing":
+                reason = "Account activity detected from multiple devices. New device identified during an active delivery. Identity re-verification required."
+            elif second_signature:
+                reason = "Potential second behavioural signature detected"
+            else:
+                reason = "Repeated multivariate behavioural anomaly"
             if existing:
                 combined = jload(existing["evidence_json"], []) + evidence
                 connection.execute("UPDATE incidents SET evidence_json=?,evidence_count=?,reason=?,status='VERIFYING',updated_at=? WHERE id=?", (jdump(combined), persistent_count, reason, utc_now(), incident_id))
             else:
-                connection.execute("INSERT INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (incident_id, rider_id, "VERIFYING", reason, jdump(evidence), persistent_count, "Await simulated verification result", utc_now(), utc_now()))
+                connection.execute("INSERT INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (incident_id, rider_id, "VERIFYING", reason, jdump(evidence), persistent_count, "Await identity verification result", utc_now(), utc_now()))
             existing_challenge = connection.execute("SELECT * FROM verification_challenges WHERE incident_id=? AND status='PENDING'", (incident_id,)).fetchone()
             challenge_id = existing_challenge["id"] if existing_challenge else f"VER-{rider_id}-{uuid4().hex[:10]}"
             if not existing_challenge:
@@ -477,9 +559,13 @@ def process_event(rider_id: str, event_type: str, event_key: str | None = None) 
             (session_id, rider_id, utc_now(), event_type, features["login_minute"], features["shift_hours"], features["acceptance"], features["route_consistency"], features["device_known"], model_score, int(anomalous), jdump(evidence), MODEL_VERSION),
         )
         verification_status = "REQUESTED" if challenge_id else (rider["verification_status"] if state != "TRUSTED" else "NOT_REQUIRED")
-        summary = evidence[0]["change"] if evidence else "Activity matched the established baseline"
+        summary = "New device identified during an active delivery" if event_type == "account_sharing" else (evidence[0]["change"] if evidence else "Activity matched the established baseline")
         connection.execute("UPDATE riders SET trust_score=?,state=?,verification_status=?,pending_verification_id=?,last_event=?,updated_at=? WHERE id=?", (trust, state, verification_status, challenge_id, summary, utc_now(), rider_id))
-        explanation = f"{len(evidence)} evidence signals evaluated; {action.replace('_', ' ').lower()} selected under policy hysteresis."
+        explanation = (
+            "Account activity detected from multiple devices. New device identified during an active delivery. Identity re-verification required."
+            if event_type == "account_sharing"
+            else f"{len(evidence)} evidence signals evaluated; {action.replace('_', ' ').lower()} selected under policy hysteresis."
+        )
         should_log = bool(event_key) or bool(evidence) or state != previous
         risk_severity = "HIGH RISK" if state == "HUMAN_REVIEW" else "SUSPICIOUS" if state in {"OBSERVING", "VERIFICATION_REQUIRED"} else "TRUSTED"
         event_payload = {"sessionId": session_id, "modelScore": model_score, "action": action, "trustScore": trust, "riskSeverity": risk_severity, "verificationStatus": verification_status}
@@ -500,24 +586,45 @@ def complete_verification(identifier: str, result: str, source: str = "SIMULATED
             (identifier, identifier),
         ).fetchone()
         if not challenge:
-            raise ValueError("Verification challenge not found")
+            rider = connection.execute("SELECT * FROM riders WHERE id=?", (identifier,)).fetchone()
+            if rider:
+                incident = connection.execute("SELECT * FROM incidents WHERE rider_id=? ORDER BY created_at DESC LIMIT 1", (rider["id"],)).fetchone()
+                incident_id = incident["id"] if incident else f"incident-{rider['id']}-{int(time.time())}"
+                if not incident:
+                    connection.execute(
+                        "INSERT INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (incident_id, rider["id"], "VERIFYING", "Ad-hoc identity verification check", "[]", 1, "Verify identity", utc_now(), utc_now()),
+                    )
+                challenge_id = f"challenge-{rider['id']}-{int(time.time())}"
+                connection.execute(
+                    "INSERT INTO verification_challenges(id,incident_id,rider_id,status,created_at) VALUES(?,?,?,?,?)",
+                    (challenge_id, incident_id, rider["id"], "PENDING", utc_now()),
+                )
+                challenge = connection.execute("SELECT * FROM verification_challenges WHERE id=?", (challenge_id,)).fetchone()
+            else:
+                raise ValueError("Verification challenge not found")
         rider = connection.execute("SELECT * FROM riders WHERE id=?", (challenge["rider_id"],)).fetchone()
         incident = connection.execute("SELECT * FROM incidents WHERE id=?", (challenge["incident_id"],)).fetchone()
         attempts = challenge["attempts"] + 1
         method = source.upper().replace(" ", "_")[:40]
         result_label = "Face verification" if method == "FACE_MATCH" else "Simulated verification"
         if result == "PASSED":
-            trust = min(86, rider["trust_score"] + 45)
-            state = "OBSERVING" if incident["evidence_count"] >= 3 else "TRUSTED"
+            trust = 100 if method == "FACE_MATCH" else min(90, rider["trust_score"] + 35)
+            state = "TRUSTED" if method == "FACE_MATCH" or incident["evidence_count"] < 3 else "OBSERVING"
             incident_status = "RESOLVED"
             action = "RESOLVE_INCIDENT"
-            next_step = f"Passive monitoring after {result_label.lower()}"
+            next_step = "Identity successfully re-verified. Previously detected device anomaly resolved."
+            decision_msg = "Identity successfully re-verified via face match. Previously detected device anomaly resolved."
+            # Automatically trust the verified device
+            connection.execute("UPDATE recognised_devices SET trusted=1,last_seen_at=? WHERE rider_id=?", (utc_now(), rider["id"]))
         elif result == "FAILED":
-            trust, state, incident_status, action = 24, "HUMAN_REVIEW", "HUMAN_REVIEW", "ESCALATE_HUMAN_REVIEW"
-            next_step = "Human review required after failed identity verification"
+            trust, state, incident_status, action = 35, "HUMAN_REVIEW", "HUMAN_REVIEW", "ESCALATE_HUMAN_REVIEW"
+            next_step = "Human review required after failed identity verification: identity mismatch detected on new device"
+            decision_msg = "Identity verification failed. Scanned face did not match enrolled reference photograph. Trust reduced to 35 (RED). Escalate for human review."
         else:
             trust, state, incident_status, action = max(28, rider["trust_score"] - 8), "VERIFICATION_REQUIRED", "VERIFYING", "REQUEST_VERIFICATION"
             next_step = "Retry or await human review if unresolved"
+            decision_msg = "Verification result inconclusive; policy kept verification challenge open."
         safe_metadata = {
             key: value for key, value in (metadata or {}).items()
             if key in {"matchDistance", "movementChecks", "model", "note"}
@@ -527,10 +634,17 @@ def complete_verification(identifier: str, result: str, source: str = "SIMULATED
             (result, attempts, utc_now(), result, method, jdump(safe_metadata), int(method != "FACE_MATCH"), challenge["id"]),
         )
         connection.execute("UPDATE incidents SET status=?,recommended_next_step=?,updated_at=? WHERE id=?", (incident_status, next_step, utc_now(), incident["id"]))
-        connection.execute("UPDATE riders SET trust_score=?,state=?,verification_status=?,pending_verification_id=NULL,last_event=?,updated_at=? WHERE id=?", (trust, state, result, f"{result_label} {result.lower()}; trust reassessed", utc_now(), rider["id"]))
+        connection.execute("UPDATE riders SET trust_score=?,state=?,verification_status=?,pending_verification_id=NULL,last_event=?,updated_at=? WHERE id=?", (trust, state, result, next_step, utc_now(), rider["id"]))
         risk_severity = "HIGH RISK" if state == "HUMAN_REVIEW" else "SUSPICIOUS" if state in {"OBSERVING", "VERIFICATION_REQUIRED"} else "TRUSTED"
-        event_id = emit_event(connection, f"verification-{challenge['id']}-{attempts}-{result}", rider["id"], f"{result_label} {result.lower()} — {action.replace('_', ' ').title()}", "trusted" if incident_status == "RESOLVED" else "risk", "verification", incident["id"], {"result": result, "action": action, "method": method, "trustScore": trust, "riskSeverity": risk_severity, "verificationStatus": result, **safe_metadata})
-        connection.execute("INSERT INTO decisions(event_id,incident_id,rider_id,created_at,previous_state,new_state,action,explanation,model_version,trust_score) VALUES(?,?,?,?,?,?,?,?,?,?)", (event_id, incident["id"], rider["id"], utc_now(), rider["state"], state, action, "Verification result was combined with accumulated behavioral evidence; it did not unconditionally restore trust.", MODEL_VERSION, trust))
+        event_message = (
+            "Identity successfully re-verified. Previously detected device anomaly resolved."
+            if (result == "PASSED" and method == "FACE_MATCH")
+            else f"Face verification failed — Escalate Human Review. Identity mismatch detected on new device."
+            if result == "FAILED"
+            else f"{result_label} {result.lower()} — {action.replace('_', ' ').title()}"
+        )
+        event_id = emit_event(connection, f"verification-{challenge['id']}-{attempts}-{result}", rider["id"], event_message, "trusted" if incident_status == "RESOLVED" else "risk", "verification", incident["id"], {"result": result, "action": action, "method": method, "trustScore": trust, "riskSeverity": risk_severity, "verificationStatus": result, **safe_metadata})
+        connection.execute("INSERT INTO decisions(event_id,incident_id,rider_id,created_at,previous_state,new_state,action,explanation,model_version,trust_score) VALUES(?,?,?,?,?,?,?,?,?,?)", (event_id, incident["id"], rider["id"], utc_now(), rider["state"], state, action, decision_msg, MODEL_VERSION, trust))
         return {"riderId": rider["id"], "result": result, "state": state, "trustScore": trust, "action": action}
 
 
@@ -616,7 +730,7 @@ def rider_payload(connection: sqlite3.Connection, rider: sqlite3.Row) -> dict:
         "usualLocation": account["primary_area"] if account else rider["city"],
         "deliveriesAccepted": rider["deliveries_accepted"], "deliveriesCompleted": rider["deliveries_completed"],
         "currentDelivery": dict(current_delivery) if current_delivery else None,
-        "hasReferencePhoto": bool(account and account["profile_photo_path"]),
+        "hasReferencePhoto": bool(account and (account["profile_photo_data"] or account["profile_photo_path"])),
         "relationships": {"relatedAccounts": related_accounts, "sharedDevices": len(shared_devices), "assessment": "UNDER INVESTIGATION" if related_accounts else "NO MATERIAL CONNECTION"},
         "handoffAssessment": {"riskScore": handoff_risk, "dataSufficiency": "SUFFICIENT" if len(recent) >= 2 or len(active_sessions) > 1 else "LIMITED", "contributors": handoff_contributors[:5], "recommendedAction": latest_action.replace("_", " ")},
         "activeSessionCount": len(active_sessions),
@@ -744,7 +858,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="StillYou? Automation Engine", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5175", "http://localhost:5175"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 class ScenarioRequest(BaseModel):
@@ -815,7 +929,7 @@ class OtpVerifyRequest(BaseModel):
     code: str
 
 
-def save_reference_photo(rider_id: str, data_url: str) -> str:
+def decode_reference_photo(data_url: str) -> tuple[bytes, str]:
     if "," not in data_url:
         raise ValueError("A JPEG or PNG profile photograph is required")
     header, encoded = data_url.split(",", 1)
@@ -826,17 +940,18 @@ def save_reference_photo(rider_id: str, data_url: str) -> str:
         raw = base64.b64decode(encoded, validate=True)
     except ValueError as error:
         raise ValueError("Profile photograph is not valid base64 data") from error
-    if not 1_000 <= len(raw) <= 4_000_000:
-        raise ValueError("Profile photograph must be between 1 KB and 4 MB")
+    if not 1_000 <= len(raw) <= 12_000_000:
+        raise ValueError("Profile photograph must be between 1 KB and 12 MB")
     if extension == ".png" and not raw.startswith(b"\x89PNG"):
         raise ValueError("Invalid PNG photograph")
     if extension == ".jpg" and not raw.startswith(b"\xff\xd8"):
         raise ValueError("Invalid JPEG photograph")
-    UPLOADS_PATH.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = UPLOADS_PATH / f"{rider_id}{extension}"
-    path.write_bytes(raw)
-    path.chmod(0o600)
-    return str(path)
+    return raw, "image/png" if extension == ".png" else "image/jpeg"
+
+
+def save_reference_photo(rider_id: str, data_url: str) -> tuple[bytes, str]:
+    """Validate a consenting reference image; the caller stores it in the private database."""
+    return decode_reference_photo(data_url)
 
 
 def session_from_authorization(authorization: str | None) -> sqlite3.Row:
@@ -863,8 +978,8 @@ def portal_payload(rider_id: str, session_id: str | None = None) -> dict:
         account = connection.execute("SELECT * FROM rider_accounts WHERE rider_id=?", (rider_id,)).fetchone()
         available = [dict(row) for row in connection.execute(
             "SELECT * FROM deliveries WHERE ((status='AVAILABLE' AND id NOT IN (SELECT order_id FROM delivery_declines WHERE session_id=?)) "
-            "OR (rider_id=? AND status IN ('ACCEPTED','PICKED_UP'))) ORDER BY created_at LIMIT 4",
-            (session_id or "", rider_id),
+            "OR (rider_id=? AND session_id=? AND status IN ('ACCEPTED','PICKED_UP'))) ORDER BY created_at LIMIT 4",
+            (session_id or "", rider_id, session_id or ""),
         )]
         recent = [dict(row) | {"payload": jload(row["payload_json"], {})} for row in connection.execute(
             "SELECT * FROM activity_events WHERE rider_id=? ORDER BY id DESC LIMIT 12", (rider_id,)
@@ -883,6 +998,11 @@ def portal_payload(rider_id: str, session_id: str | None = None) -> dict:
                     "deviceId": current_session["device_id"], "label": current_session["device_label"],
                     "known": bool(current_device and current_device["trusted"]),
                 }
+                session_delivery = connection.execute(
+                    "SELECT * FROM deliveries WHERE rider_id=? AND session_id=? AND status IN ('ACCEPTED','PICKED_UP') ORDER BY updated_at DESC LIMIT 1",
+                    (rider_id, session_id),
+                ).fetchone()
+                rider_data["currentDelivery"] = dict(session_delivery) if session_delivery else None
         return {
             "rider": rider_data,
             "account": {"contact": account["contact"], "primaryArea": account["primary_area"], "preferredHours": account["preferred_hours"]} if account else None,
@@ -902,7 +1022,11 @@ def open_rider_session(rider_id: str, device: DeviceContext, auth_kind: str) -> 
             "SELECT * FROM recognised_devices WHERE rider_id=? AND device_id=?", (rider_id, device.device_id)
         ).fetchone()
         has_any = connection.execute("SELECT 1 FROM recognised_devices WHERE rider_id=? LIMIT 1", (rider_id,)).fetchone()
-        unknown_device = bool(has_any and not known)
+        active_same_device = connection.execute(
+            "SELECT 1 FROM rider_sessions WHERE rider_id=? AND device_id=? AND revoked_at IS NULL AND expires_at>? LIMIT 1",
+            (rider_id, device.device_id, utc_now()),
+        ).fetchone()
+        unknown_device = bool(has_any and (not known or not known["trusted"]) and not active_same_device)
         if known:
             connection.execute(
                 "UPDATE recognised_devices SET last_seen_at=?,device_label=?,browser_profile=? WHERE id=?",
@@ -960,7 +1084,7 @@ def register(body: RegistrationRequest):
             if not connection.execute("SELECT 1 FROM riders WHERE id=?", (rider_id,)).fetchone():
                 break
     try:
-        photo_path = save_reference_photo(rider_id, body.photo_data)
+        photo_data, photo_mime = save_reference_photo(rider_id, body.photo_data)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     password_hash, salt = hash_password(body.password)
@@ -973,8 +1097,8 @@ def register(body: RegistrationRequest):
         )
         seed_history(connection, profile)
         connection.execute(
-            "INSERT INTO rider_accounts(rider_id,contact,password_hash,password_salt,profile_photo_path,primary_area,preferred_hours,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (rider_id, contact, password_hash, salt, photo_path, body.primary_area.strip(), body.preferred_hours, now),
+            "INSERT INTO rider_accounts(rider_id,contact,password_hash,password_salt,profile_photo_data,profile_photo_mime,primary_area,preferred_hours,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (rider_id, contact, password_hash, salt, photo_data, photo_mime, body.primary_area.strip(), body.preferred_hours, now),
         )
         emit_event(connection, f"registration-{rider_id}", rider_id, "Rider registered; provisional behavioural baseline created", "trusted", "authentication", payload={"action": "BUILD_PROVISIONAL_BASELINE"})
     train_models()
@@ -1039,7 +1163,9 @@ def portal_me(authorization: Optional[str] = Header(default=None)):
 def reference_photo(authorization: Optional[str] = Header(default=None)):
     session = session_from_authorization(authorization)
     with db() as connection:
-        account = connection.execute("SELECT profile_photo_path FROM rider_accounts WHERE rider_id=?", (session["rider_id"],)).fetchone()
+        account = connection.execute("SELECT profile_photo_path,profile_photo_data,profile_photo_mime FROM rider_accounts WHERE rider_id=?", (session["rider_id"],)).fetchone()
+    if account and account["profile_photo_data"]:
+        return Response(content=bytes(account["profile_photo_data"]), media_type=account["profile_photo_mime"] or "image/jpeg", headers={"Cache-Control": "no-store"})
     if not account or not account["profile_photo_path"] or not Path(account["profile_photo_path"]).exists():
         raise HTTPException(404, "No registered reference photograph is available")
     return FileResponse(account["profile_photo_path"], media_type="image/png" if account["profile_photo_path"].endswith(".png") else "image/jpeg", headers={"Cache-Control": "no-store"})
@@ -1049,11 +1175,14 @@ def reference_photo(authorization: Optional[str] = Header(default=None)):
 def update_reference_photo(body: ReferencePhotoRequest, authorization: Optional[str] = Header(default=None)):
     session = session_from_authorization(authorization)
     try:
-        path = save_reference_photo(session["rider_id"], body.photo_data)
+        photo_data, photo_mime = save_reference_photo(session["rider_id"], body.photo_data)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     with db() as connection:
-        connection.execute("UPDATE rider_accounts SET profile_photo_path=? WHERE rider_id=?", (path, session["rider_id"]))
+        connection.execute(
+            "UPDATE rider_accounts SET profile_photo_data=?,profile_photo_mime=?,profile_photo_path=NULL WHERE rider_id=?",
+            (photo_data, photo_mime, session["rider_id"]),
+        )
         emit_event(connection, f"reference-photo-{session['rider_id']}-{uuid4().hex[:8]}", session["rider_id"], "Identity reference photograph updated with rider consent", "trusted", "identity", payload={"action": "UPDATE_REFERENCE_PHOTO"})
     return {"status": "stored"}
 
@@ -1067,12 +1196,11 @@ def request_otp(authorization: Optional[str] = Header(default=None)):
     now = datetime.now(timezone.utc)
     with db() as connection:
         rider = connection.execute("SELECT * FROM riders WHERE id=?", (rider_id,)).fetchone()
-        if not rider or not rider["pending_verification_id"]:
-            raise HTTPException(409, "Identity verification is not currently required")
+        verification_id = rider["pending_verification_id"] if (rider and rider["pending_verification_id"]) else f"DEMO-VER-{rider_id}"
         connection.execute("UPDATE otp_challenges SET status='SUPERSEDED' WHERE rider_id=? AND status='PENDING'", (rider_id,))
         connection.execute(
             "INSERT INTO otp_challenges(id,rider_id,verification_id,code_hash,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
-            (challenge_id, rider_id, rider["pending_verification_id"], token_digest(code), "PENDING", utc_now(), (now + timedelta(minutes=5)).isoformat(timespec="seconds")),
+            (challenge_id, rider_id, verification_id, token_digest(code), "PENDING", utc_now(), (now + timedelta(minutes=5)).isoformat(timespec="seconds")),
         )
         emit_event(connection, f"otp-request-{challenge_id}", rider_id, "Demonstration OTP requested", "watch", "verification", payload={"method": "DEMO_OTP", "expiresInSeconds": 300})
     response = {"challengeId": challenge_id, "expiresAt": (now + timedelta(minutes=5)).isoformat(timespec="seconds"), "delivery": "LOCAL_DEMO"}
@@ -1098,12 +1226,23 @@ def verify_otp(body: OtpVerifyRequest, authorization: Optional[str] = Header(def
             emit_event(connection, f"otp-failed-{otp['id']}-{attempts}", rider_id, "Demonstration OTP validation failed", "risk", "verification", payload={"method": "DEMO_OTP", "attempt": attempts})
             raise HTTPException(400, "OTP is incorrect")
         connection.execute("UPDATE otp_challenges SET attempts=?,status='PASSED',completed_at=? WHERE id=?", (attempts, utc_now(), otp["id"]))
+        
+        # Security invariant: Passing OTP alone must never automatically override a confirmed face mismatch
+        rider = connection.execute("SELECT * FROM riders WHERE id=?", (rider_id,)).fetchone()
+        face_mismatch_confirmed = bool(rider and (rider["state"] == "HUMAN_REVIEW" or rider["verification_status"] == "FAILED"))
+        if face_mismatch_confirmed:
+            emit_event(connection, f"otp-blocked-mismatch-{otp['id']}", rider_id, "Demonstration OTP verified; confirmed face mismatch cannot be overridden by OTP", "risk", "verification", payload={"method": "DEMO_OTP", "action": "MAINTAIN_HUMAN_REVIEW"})
+            return {"result": "PASSED_RESTRICTED", "message": "OTP verified, but confirmed face mismatch cannot be overridden by OTP alone. Face re-verification or supervisor review required.", **portal_payload(rider_id, session["id"])}
+            
+        if otp["verification_id"].startswith("DEMO-VER-"):
+            return {"result": "PASSED_DEMO", "message": "Demonstration OTP verified successfully. Channel possession confirmed.", **portal_payload(rider_id, session["id"])}
+            
         core = connection.execute("SELECT c.*,i.evidence_count FROM verification_challenges c JOIN incidents i ON i.id=c.incident_id WHERE c.id=?", (otp["verification_id"],)).fetchone()
         strong_evidence = bool(core and core["evidence_count"] >= 3)
         if strong_evidence:
             emit_event(connection, f"otp-passed-limited-{otp['id']}", rider_id, "Demonstration OTP passed; stronger identity evidence still requires face verification", "watch", "verification", core["incident_id"], {"method": "DEMO_OTP", "action": "KEEP_FACE_VERIFICATION_REQUIRED"})
-    if strong_evidence:
-        return {"result": "PASSED_LIMITED", "message": "OTP accepted. Strong identity-handoff evidence still requires face verification.", **portal_payload(rider_id, session["id"])}
+            return {"result": "PASSED_LIMITED", "message": "OTP accepted. Strong identity-handoff evidence still requires face verification.", **portal_payload(rider_id, session["id"])}
+            
     complete_verification(otp["verification_id"], "PASSED", "DEMO_OTP", {"note": "Local demonstration OTP; channel possession only"})
     return {"result": "PASSED", "message": "OTP accepted and risk reassessed.", **portal_payload(rider_id, session["id"])}
 
@@ -1117,7 +1256,11 @@ def portal_action(body: PortalActionRequest, authorization: Optional[str] = Head
     with db() as connection:
         rider = connection.execute("SELECT * FROM riders WHERE id=?", (rider_id,)).fetchone()
         account = connection.execute("SELECT * FROM rider_accounts WHERE rider_id=?", (rider_id,)).fetchone()
-        message, kind, tone, payload = "Session activity recorded", "session", "trusted", {"action": action, "sessionId": session["id"]}
+        if rider["state"] in {"VERIFICATION_REQUIRED", "HUMAN_REVIEW"} and action in {"ACCEPT_DELIVERY", "PICKED_UP", "COMPLETE_DELIVERY"}:
+            raise HTTPException(423, "Identity verification is required before this delivery action can continue")
+        message, kind, tone, payload = "Session activity recorded", "session", "trusted", {
+            "action": action, "sessionId": session["id"], "deviceId": session["device_id"], "deviceLabel": session["device_label"],
+        }
         if action == "GO_ONLINE":
             now = utc_now()
             if not rider["online_status"]:
@@ -1140,9 +1283,25 @@ def portal_action(body: PortalActionRequest, authorization: Optional[str] = Head
             order = connection.execute("SELECT * FROM deliveries WHERE id=? AND status='AVAILABLE'", (body.order_id,)).fetchone()
             if not order:
                 raise HTTPException(409, "Delivery is no longer available")
-            connection.execute("UPDATE deliveries SET rider_id=?,status='ACCEPTED',updated_at=? WHERE id=?", (rider_id, utc_now(), order["id"]))
+            overlapping_delivery = connection.execute(
+                "SELECT * FROM deliveries WHERE rider_id=? AND session_id IS NOT NULL AND session_id!=? AND status IN ('ACCEPTED','PICKED_UP') LIMIT 1",
+                (rider_id, session["id"]),
+            ).fetchone()
+            other_device = connection.execute(
+                "SELECT * FROM rider_sessions WHERE rider_id=? AND id!=? AND device_id!=? AND revoked_at IS NULL AND expires_at>? "
+                "AND last_seen_at>=? ORDER BY last_seen_at DESC LIMIT 1",
+                (rider_id, session["id"], session["device_id"], utc_now(), (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds")),
+            ).fetchone()
+            connection.execute("UPDATE deliveries SET rider_id=?,session_id=?,status='ACCEPTED',updated_at=? WHERE id=?", (rider_id, session["id"], utc_now(), order["id"]))
             connection.execute("UPDATE riders SET deliveries_accepted=deliveries_accepted+1,updated_at=? WHERE id=?", (utc_now(), rider_id))
             message, kind, payload = f"Delivery {order['id']} accepted", "delivery", {**payload, "orderId": order["id"], "status": "ACCEPTED"}
+            if overlapping_delivery and other_device:
+                security_event, tone = "account_sharing", "risk"
+                message = "Account activity detected from multiple devices; new device accepted an order during an active delivery"
+                payload.update({
+                    "conflictingDeviceId": other_device["device_id"], "activeOrderId": overlapping_delivery["id"],
+                    "reason": "New device identified during an active delivery", "verificationRequired": True,
+                })
         elif action == "DECLINE_DELIVERY":
             order = connection.execute("SELECT * FROM deliveries WHERE id=? AND status='AVAILABLE'", (body.order_id,)).fetchone()
             if not order:
@@ -1332,16 +1491,36 @@ async def reset_demo():
     global DEMO_TASK
     if DEMO_TASK and not DEMO_TASK.done():
         DEMO_TASK.cancel()
-    await asyncio.to_thread(reset_database)
+    await asyncio.to_thread(reset_demo_rider)
     await asyncio.to_thread(train_models)
-    publish({"type": "reset"})
-    return {"status": "reset"}
+    publish({"type": "reset", "riderId": "R-9001"})
+    return {"status": "reset", "riderId": "R-9001", "requiresRelogin": False}
 
 
 @app.post("/api/verification/{identifier}/complete")
-def verify(identifier: str, body: VerificationRequest):
+def verify(identifier: str, body: VerificationRequest, authorization: Optional[str] = Header(default=None)):
+    session = None
+    if authorization:
+        try:
+            session = session_from_authorization(authorization)
+        except HTTPException:
+            session = None
+    with db() as connection:
+        challenge = connection.execute(
+            "SELECT rider_id FROM verification_challenges WHERE id=? OR (rider_id=? AND status='PENDING') ORDER BY created_at DESC LIMIT 1",
+            (identifier, identifier),
+        ).fetchone()
+    if session and challenge and challenge["rider_id"] != session["rider_id"]:
+        raise HTTPException(403, "Verification challenge does not belong to this rider session")
     try:
-        return complete_verification(identifier, body.result, body.source, body.metadata)
+        result = complete_verification(identifier, body.result, body.source, body.metadata)
+        if body.result.upper() == "PASSED" and body.source.upper().replace(" ", "_") == "FACE_MATCH" and session:
+            with db() as connection:
+                connection.execute(
+                    "UPDATE recognised_devices SET trusted=1,last_seen_at=? WHERE rider_id=? AND device_id=?",
+                    (utc_now(), session["rider_id"], session["device_id"]),
+                )
+        return result
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 

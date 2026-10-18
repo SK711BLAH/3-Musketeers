@@ -18,9 +18,9 @@ function NeedsAttention({ riders, incidents, onAction, onSelect }) {
   })}</section>;
 }
 
-function LiveMonitor({ riders, events, incidents, stats, connectionStatus, selectedId, focusId, onFocus, onFocusComplete, onSelect, onReview }) {
+function LiveMonitor({ riders, events, incidents, stats, connectionStatus, selectedId, focusId, onFocus, onFocusComplete, onSelect, onReview, onResetDemo, resettingDemo }) {
   return <main className="overview live-monitor">
-    <Metrics stats={stats} connectionStatus={connectionStatus} />
+    <Metrics stats={stats} connectionStatus={connectionStatus} onResetDemo={onResetDemo} resetting={resettingDemo} />
     <NeedsAttention riders={riders} incidents={incidents} onAction={onReview} onSelect={onSelect} />
     <DominoGrid riders={riders} focusId={focusId} selectedId={selectedId} onFocus={onFocus} onFocusComplete={onFocusComplete} />
     <SessionTable riders={riders} events={events} onSelect={onSelect} />
@@ -38,6 +38,7 @@ export default function App() {
   const [mapFocusId, setMapFocusId] = useState(null);
   const [panelClosing, setPanelClosing] = useState(false);
   const [error, setError] = useState('');
+  const [resettingDemo, setResettingDemo] = useState(false);
   const panelTimer = useRef(null);
   const refreshTimer = useRef(null);
 
@@ -105,14 +106,19 @@ export default function App() {
     if (incident) await api.reviewIncident(incident.id, action);
     await refresh();
   };
+  const resetDemoRider = async () => {
+    setResettingDemo(true);
+    try { await api.resetDemo(); await refresh(); setMapFocusId('R-9001'); }
+    finally { setResettingDemo(false); }
+  };
   const selectedRider = riders.find(rider => rider.id === selectedId);
   const content = useMemo(() => {
     if (!riders.length) return null;
     if (view === 'INTELLIGENCE LAB') return <IntelligenceLab riders={riders} events={events} selectedId={selectedId} onSelect={setSelectedId} />;
     if (view === 'RIDER INSIGHTS') return <RiderInsights riders={riders} events={events} selectedId={selectedId} onSelect={setSelectedId} />;
     if (view === 'RIDER PORTAL') return <RiderPortal riders={riders} onComplete={completeVerification} onRefresh={refresh} onBack={() => setView('LIVE MONITOR')} />;
-    return <LiveMonitor riders={riders} events={events} incidents={incidents} stats={stats} connectionStatus={connectionStatus} selectedId={selectedId} focusId={mapFocusId} onFocus={focusMapRider} onFocusComplete={revealFocusedRider} onSelect={focusMapRider} onReview={reviewAction} />;
-  }, [riders, events, incidents, stats, connectionStatus, selectedId, mapFocusId, view]);
+    return <LiveMonitor riders={riders} events={events} incidents={incidents} stats={stats} connectionStatus={connectionStatus} selectedId={selectedId} focusId={mapFocusId} onFocus={focusMapRider} onFocusComplete={revealFocusedRider} onSelect={focusMapRider} onReview={reviewAction} onResetDemo={resetDemoRider} resettingDemo={resettingDemo} />;
+  }, [riders, events, incidents, stats, connectionStatus, selectedId, mapFocusId, view, resettingDemo]);
 
   if (error && !riders.length) return <div className="load-state offline"><h1>STILL ENGINE OFFLINE</h1><p>{error}</p><code>.venv/bin/uvicorn backend.main:app --port 8000</code></div>;
   if (!riders.length) return <div className="load-state"><div className="loader" /><h1>CONNECTING TO STILL ENGINE</h1></div>;

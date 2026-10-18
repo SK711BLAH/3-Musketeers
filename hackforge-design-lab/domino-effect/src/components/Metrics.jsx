@@ -1,4 +1,4 @@
-export default function Metrics({ stats, connectionStatus }) {
+export default function Metrics({ stats, connectionStatus, onResetDemo, resetting }) {
   const primary = [
     ['ACTIVE RIDERS', stats?.activeRiders ?? 0, 'neutral'],
     ['AVERAGE TRUST SCORE', stats?.averageTrust ?? 0, 'trusted'],
@@ -6,7 +6,7 @@ export default function Metrics({ stats, connectionStatus }) {
     ['PENDING VERIFICATIONS', stats?.pendingVerifications ?? 0, 'neutral'],
   ];
   return <section className="engine-summary" aria-label="Still Engine automation status">
-    <div className={`engine-connection ${connectionStatus.toLowerCase()}`}><i /><span>STILL ENGINE — {connectionStatus === 'CONNECTED' ? 'ACTIVE' : connectionStatus}</span></div>
+    <div className={`engine-connection ${connectionStatus.toLowerCase()}`}><i /><span>STILL ENGINE — {connectionStatus === 'CONNECTED' ? 'ACTIVE' : connectionStatus}</span><button type="button" onClick={onResetDemo} disabled={resetting}>{resetting ? 'RESETTING…' : 'RESET DEMO RIDER'}</button></div>
     <div className="metric-grid">
       {primary.map(([label, value, tone]) => <article className={tone} key={label}><b>{value}</b><span>{label}</span></article>)}
     </div>
