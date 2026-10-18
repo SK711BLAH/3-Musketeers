@@ -306,6 +306,184 @@ def seed_demo_access(connection: sqlite3.Connection) -> None:
         )
 
 
+RIDER_SEED_VARIATION = {
+    "R-1042": {
+        "trust_score": 28, "state": "VERIFICATION_REQUIRED", "verification_status": "REQUESTED",
+        "pending_verification_id": "VER-R-1042-83bfdfcd47", "last_event": "Potential second behavioural signature detected — Identity verification required",
+        "online_status": 1, "current_location": "Malad, Mumbai",
+    },
+    "R-2187": {
+        "trust_score": 75, "state": "OBSERVING", "verification_status": "NOT_REQUIRED",
+        "pending_verification_id": None, "last_event": "Location deviation detected: Link Road Kitchen vs Indiranagar baseline",
+        "online_status": 1, "current_location": "Indiranagar, Bengaluru",
+    },
+    "R-3091": {
+        "trust_score": 67, "state": "OBSERVING", "verification_status": "NOT_REQUIRED",
+        "pending_verification_id": None, "last_event": "Alternate device profile activated; monitoring delivery telemetry",
+        "online_status": 1, "current_location": "Connaught Place, Delhi",
+    },
+    "R-4470": {
+        "trust_score": 24, "state": "HUMAN_REVIEW", "verification_status": "FAILED",
+        "pending_verification_id": None, "last_event": "Failed identity verification escalated for human review",
+        "online_status": 1, "current_location": "Kothrud, Pune",
+    },
+    "R-5108": {
+        "trust_score": 24, "state": "HUMAN_REVIEW", "verification_status": "FAILED",
+        "pending_verification_id": None, "last_event": "Failed identity verification escalated for human review",
+        "online_status": 1, "current_location": "Hitec City, Hyderabad",
+    },
+    "R-6284": {
+        "trust_score": 96, "state": "TRUSTED", "verification_status": "NOT_REQUIRED",
+        "pending_verification_id": None, "last_event": "Identity monitoring active; behavioural baseline established",
+        "online_status": 1, "current_location": "Navrangpura, Ahmedabad",
+    },
+    "R-7315": {
+        "trust_score": 96, "state": "TRUSTED", "verification_status": "NOT_REQUIRED",
+        "pending_verification_id": None, "last_event": "Consistent route delivery completed within expected window",
+        "online_status": 1, "current_location": "Salt Lake, Kolkata",
+    },
+    "R-8462": {
+        "trust_score": 88, "state": "TRUSTED", "verification_status": "NOT_REQUIRED",
+        "pending_verification_id": None, "last_event": "Recognised device profile restored — Trust score recovered",
+        "online_status": 1, "current_location": "T. Nagar, Chennai",
+    },
+}
+
+
+def seed_dummy_variation(connection: sqlite3.Connection) -> None:
+    now = utc_now()
+    score_variance = connection.execute(
+        "SELECT COUNT(DISTINCT trust_score) FROM riders WHERE id != 'R-9001'"
+    ).fetchone()[0]
+
+    # If dummy data lacks variation (e.g. all riders share default score 94), populate the variation
+    if score_variance <= 1:
+        for rider_id, v in RIDER_SEED_VARIATION.items():
+            connection.execute(
+                "UPDATE riders SET trust_score=?,state=?,verification_status=?,pending_verification_id=?,last_event=?,online_status=?,current_location=?,updated_at=? WHERE id=?",
+                (v["trust_score"], v["state"], v["verification_status"], v["pending_verification_id"], v["last_event"], v["online_status"], v["current_location"], now, rider_id),
+            )
+
+    # Ensure sample incidents exist for operator review
+    if not connection.execute("SELECT 1 FROM incidents WHERE rider_id='R-1042'").fetchone():
+        inc_id = "INC-R-1042-83bfdfcd47"
+        evidence = [
+            {"signal": "schedule", "change": "Shift start moved 314 minutes", "unusual": "Outside established working window", "weight": "medium"},
+            {"signal": "route", "change": "Route consistency fell by 0.38", "unusual": "Delivery sequence differs from baseline", "weight": "high"},
+            {"signal": "activity", "change": "Acceptance rate fell by 0.24", "unusual": "Persistent interaction change", "weight": "high"},
+            {"signal": "isolation_forest", "change": "Model decision score -0.1387", "unusual": "Unusual multivariate feature combination", "weight": "supporting"},
+            {"signal": "device", "change": "Previously unseen device", "unusual": "Context only", "weight": "low"}
+        ]
+        connection.execute(
+            "INSERT OR IGNORE INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (inc_id, "R-1042", "VERIFYING", "Potential second behavioural signature detected", json.dumps(evidence), 5, "Retry or await human review if unresolved", now, now),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO verification_challenges(id,incident_id,rider_id,status,attempts,simulated,created_at,method) VALUES(?,?,?,?,?,?,?,?)",
+            ("VER-R-1042-83bfdfcd47", inc_id, "R-1042", "PENDING", 0, 1, now, "SIMULATED"),
+        )
+        connection.execute(
+            "INSERT INTO decisions(incident_id,rider_id,created_at,previous_state,new_state,action,explanation,model_version,trust_score) VALUES(?,?,?,?,?,?,?,?,?)",
+            (inc_id, "R-1042", now, "OBSERVING", "VERIFICATION_REQUIRED", "REQUEST_VERIFICATION", "Identity verification requested following multivariate behavioral anomaly.", MODEL_VERSION, 28),
+        )
+
+    if not connection.execute("SELECT 1 FROM incidents WHERE rider_id='R-4470'").fetchone():
+        inc_id = "INC-R-4470-9c0c7084a9"
+        evidence = [
+            {"signal": "account_sharing", "change": "Account activity detected from multiple devices", "unusual": "New device identified during an active delivery", "weight": "critical"},
+            {"signal": "policy", "change": "Identity re-verification required", "unusual": "Suspicious simultaneous activity detected across separate devices", "weight": "action"},
+            {"signal": "isolation_forest", "change": "Model decision score -0.1142", "unusual": "Unusual multivariate feature combination", "weight": "supporting"}
+        ]
+        connection.execute(
+            "INSERT OR IGNORE INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (inc_id, "R-4470", "HUMAN_REVIEW", "Potential second behavioural signature detected", json.dumps(evidence), 3, "Human review required before consequential action", now, now),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO verification_challenges(id,incident_id,rider_id,status,attempts,simulated,created_at,completed_at,result,method,result_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("VER-R-4470-FAILED", inc_id, "R-4470", "COMPLETED", 1, 1, now, now, "FAILED", "SIMULATED", json.dumps({"note": "Facial verification mismatch on secondary device"})),
+        )
+        connection.execute(
+            "INSERT INTO decisions(incident_id,rider_id,created_at,previous_state,new_state,action,explanation,model_version,trust_score) VALUES(?,?,?,?,?,?,?,?,?)",
+            (inc_id, "R-4470", now, "VERIFICATION_REQUIRED", "HUMAN_REVIEW", "ESCALATE_HUMAN_REVIEW", "Failed identity verification escalated for human review; no automatic account restriction was applied.", MODEL_VERSION, 24),
+        )
+
+    if not connection.execute("SELECT 1 FROM incidents WHERE rider_id='R-5108'").fetchone():
+        inc_id = "INC-R-5108-43652cbeeb"
+        evidence = [
+            {"signal": "schedule", "change": "Shift start moved 314 minutes", "unusual": "Outside established working window", "weight": "medium"},
+            {"signal": "route", "change": "Route consistency fell by 0.38", "unusual": "Delivery sequence differs from baseline", "weight": "high"},
+            {"signal": "activity", "change": "Acceptance rate fell by 0.24", "unusual": "Persistent interaction change", "weight": "high"},
+            {"signal": "isolation_forest", "change": "Model decision score -0.0628", "unusual": "Unusual multivariate feature combination", "weight": "supporting"}
+        ]
+        connection.execute(
+            "INSERT OR IGNORE INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (inc_id, "R-5108", "HUMAN_REVIEW", "Potential second behavioural signature detected", json.dumps(evidence), 4, "Human review required after failed identity verification", now, now),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO verification_challenges(id,incident_id,rider_id,status,attempts,simulated,created_at,completed_at,result,method,result_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("VER-R-5108-FAILED", inc_id, "R-5108", "COMPLETED", 1, 1, now, now, "FAILED", "SIMULATED", json.dumps({"note": "Identity verification failed"})),
+        )
+        connection.execute(
+            "INSERT INTO decisions(incident_id,rider_id,created_at,previous_state,new_state,action,explanation,model_version,trust_score) VALUES(?,?,?,?,?,?,?,?,?)",
+            (inc_id, "R-5108", now, "VERIFICATION_REQUIRED", "HUMAN_REVIEW", "ESCALATE_HUMAN_REVIEW", "Failed identity verification escalated for human review.", MODEL_VERSION, 24),
+        )
+
+    if not connection.execute("SELECT 1 FROM incidents WHERE status='RESOLVED'").fetchone():
+        connection.execute(
+            "INSERT OR IGNORE INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("INC-R-8462-RES01", "R-8462", "RESOLVED", "Temporary route deviation resolved", "[]", 1, "Passive monitoring after simulated verification", now, now),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO incidents(id,rider_id,status,reason,evidence_json,evidence_count,recommended_next_step,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("INC-R-6284-RES02", "R-6284", "RESOLVED", "Device change verified via routine check", "[]", 1, "Passive monitoring after simulated verification", now, now),
+        )
+
+    # Ensure non-baseline sessions exist for anomalous riders so radar charts and signals render
+    if not connection.execute("SELECT 1 FROM sessions WHERE rider_id='R-1042' AND event_type!='baseline'").fetchone():
+        r = connection.execute("SELECT * FROM riders WHERE id='R-1042'").fetchone()
+        if r:
+            ev = [{"signal":"schedule","change":"Shift start moved 314 minutes","unusual":"Outside established working window","weight":"medium"},{"signal":"route","change":"Route consistency fell by 0.38","unusual":"Delivery sequence differs from baseline","weight":"high"}]
+            connection.execute(
+                "INSERT OR IGNORE INTO sessions(id,rider_id,created_at,event_type,login_minute,shift_hours,acceptance,route_consistency,device_known,anomaly_score,is_anomaly,evidence_json,model_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("SES-R-1042-SEED", "R-1042", now, "account_sharing", r["normal_start"] + 314, r["shift_hours"] - 2.0, max(0.4, r["acceptance"] - 0.24), max(0.3, r["route_consistency"] - 0.38), 0, -0.1387, 1, json.dumps(ev), MODEL_VERSION),
+            )
+
+    if not connection.execute("SELECT 1 FROM sessions WHERE rider_id='R-4470' AND event_type!='baseline'").fetchone():
+        r = connection.execute("SELECT * FROM riders WHERE id='R-4470'").fetchone()
+        if r:
+            ev = [{"signal":"account_sharing","change":"Account activity detected from multiple devices","unusual":"New device identified during an active delivery","weight":"critical"}]
+            connection.execute(
+                "INSERT OR IGNORE INTO sessions(id,rider_id,created_at,event_type,login_minute,shift_hours,acceptance,route_consistency,device_known,anomaly_score,is_anomaly,evidence_json,model_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("SES-R-4470-SEED", "R-4470", now, "account_sharing", r["normal_start"] + 280, r["shift_hours"] - 2.2, max(0.4, r["acceptance"] - 0.20), max(0.3, r["route_consistency"] - 0.30), 0, -0.1142, 1, json.dumps(ev), MODEL_VERSION),
+            )
+
+    if not connection.execute("SELECT 1 FROM sessions WHERE rider_id='R-2187' AND event_type!='baseline'").fetchone():
+        r = connection.execute("SELECT * FROM riders WHERE id='R-2187'").fetchone()
+        if r:
+            ev = [{"signal":"route","change":"Route consistency fell by 0.18","unusual":"Delivery sequence differs from baseline","weight":"high"}]
+            connection.execute(
+                "INSERT OR IGNORE INTO sessions(id,rider_id,created_at,event_type,login_minute,shift_hours,acceptance,route_consistency,device_known,anomaly_score,is_anomaly,evidence_json,model_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("SES-R-2187-SEED", "R-2187", now, "route_change", r["normal_start"] + 20, r["shift_hours"] + 0.2, r["acceptance"] - 0.02, max(0.4, r["route_consistency"] - 0.18), 1, 0.042, 0, json.dumps(ev), MODEL_VERSION),
+            )
+
+    # Seed initial activity events if empty or only system events
+    non_sys = connection.execute("SELECT COUNT(*) FROM activity_events WHERE rider_id != 'SYSTEM'").fetchone()[0]
+    if non_sys < 5:
+        events = [
+            ("R-4470", "INC-R-4470-9c0c7084a9", "risk", "verification", "Failed identity verification — Escalate Human Review", {"result": "FAILED", "action": "ESCALATE_HUMAN_REVIEW", "trustScore": 24, "riskSeverity": "HIGH RISK", "verificationStatus": "FAILED"}),
+            ("R-1042", "INC-R-1042-83bfdfcd47", "watch", "verification", "Identity verification challenge issued — Account activity paused", {"action": "REQUEST_VERIFICATION", "trustScore": 28, "riskSeverity": "SUSPICIOUS", "verificationStatus": "REQUESTED"}),
+            ("R-5108", "INC-R-5108-43652cbeeb", "risk", "verification", "Multiple conflicting session signals detected — Flagged for Human Review", {"action": "ESCALATE_HUMAN_REVIEW", "trustScore": 24, "riskSeverity": "HIGH RISK", "verificationStatus": "FAILED"}),
+            ("R-2187", None, "watch", "location", "Location deviation detected: Link Road Kitchen vs Indiranagar baseline", {"action": "INCREASE_OBSERVATION", "trustScore": 75, "riskSeverity": "SUSPICIOUS"}),
+            ("R-3091", None, "watch", "device", "Demo alternate device profile activated; monitoring delivery telemetry", {"action": "INCREASE_OBSERVATION", "trustScore": 67, "riskSeverity": "SUSPICIOUS"}),
+            ("R-8462", None, "trusted", "device", "Recognised device profile restored — Trust score recovered", {"action": "CONTINUE_MONITORING", "trustScore": 88, "riskSeverity": "TRUSTED"}),
+            ("R-6284", None, "trusted", "delivery", "Delivery completed with 98% route consistency", {"action": "CONTINUE_MONITORING", "trustScore": 96, "riskSeverity": "TRUSTED"}),
+            ("R-7315", None, "trusted", "delivery", "Consistent route delivery completed within expected window", {"action": "CONTINUE_MONITORING", "trustScore": 96, "riskSeverity": "TRUSTED"}),
+        ]
+        for ev_rider, ev_inc, ev_tone, ev_kind, ev_msg, ev_payload in events:
+            emit_event(connection, f"seed-{ev_rider}-{uuid4().hex[:8]}", ev_rider, ev_msg, ev_tone, ev_kind, ev_inc, ev_payload)
+
+
+
 def init_database(reset: bool = False) -> None:
     if reset and DB_PATH.exists():
         DB_PATH.unlink()
@@ -376,8 +554,10 @@ def init_database(reset: bool = False) -> None:
                     (*rider, rider[2], now),
                 )
                 seed_history(connection, rider)
-            emit_event(connection, "system-bootstrap", "SYSTEM", "STILL Engine initialized with persistent rider baselines.", "trusted", "system")
         seed_demo_access(connection)
+        is_test = "test" in DB_PATH.name or os.getenv("STILLYOU_TEST_MODE", "0") == "1"
+        if not is_test:
+            seed_dummy_variation(connection)
 
 
 def reset_database() -> None:
