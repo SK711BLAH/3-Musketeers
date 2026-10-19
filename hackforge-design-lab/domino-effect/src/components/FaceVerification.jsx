@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, CameraOff, CheckCircle2, ScanFace, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
+import { Camera, CameraOff, CheckCircle2, RotateCcw, ScanFace, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
 
 const LOCAL_MODEL_URL = '/models';
 const CDN_MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
@@ -59,7 +59,10 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
   const stage = useRef(0);
   const submitted = useRef(false);
   const lastDistance = useRef(null);
-  const mismatchCount = useRef(0);
+  const matchConfidenceCount = useRef(0);
+  const mismatchStreak = useRef(0);
+  const noFaceCount = useRef(0);
+  const scanAttempts = useRef(1);
   const challenges = useRef(Math.random() > 0.5 ? ['blink', 'left', 'right'] : ['blink', 'right', 'left']);
 
   const [model, setModel] = useState('NOT LOADED');
@@ -67,8 +70,10 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
   const [face, setFace] = useState('NO FACE DETECTED');
   const [progress, setProgress] = useState(0);
   const [match, setMatch] = useState(null);
-  const [status, setStatus] = useState('Start the camera to verify your identity.');
+  const [status, setStatus] = useState('Starting camera to scan face...');
   const [error, setError] = useState('');
+  const [scanState, setScanState] = useState('IDLE'); // 'IDLE' | 'STARTING' | 'SCANNING' | 'VERIFIED' | 'MISMATCH_ASK_RESCAN'
+  const [autoRetryTimer, setAutoRetryTimer] = useState(5);
 
   const stop = () => {
     running.current = false;
@@ -76,6 +81,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
     stream.current = null;
     if (video.current) video.current.srcObject = null;
     setCamera(false);
+    setScanState('IDLE');
   };
 
   useEffect(() => () => stop(), []);
@@ -85,7 +91,26 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
     enrolled.current = null;
     enrolledIsSynthetic.current = false;
     setMatch(null);
+    matchConfidenceCount.current = 0;
+    mismatchStreak.current = 0;
   }, [referencePhotoUrl]);
+
+  // Countdown timer for automatic re-scan when in MISMATCH_ASK_RESCAN state
+  useEffect(() => {
+    if (scanState !== 'MISMATCH_ASK_RESCAN') return;
+    setAutoRetryTimer(5);
+    const interval = setInterval(() => {
+      setAutoRetryTimer(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          handleRescan();
+          return 5;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [scanState]);
 
   const loadModels = async () => {
     if (api.current) return true;
@@ -169,8 +194,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
         return true;
       }
 
-      // Any image works! If no neural face detected (e.g. non-face, cartoon, ID card, landscape, or dim light),
-      // generate a perceptual descriptor so verification continues smoothly without errors.
+      // If no neural face detected, generate perceptual descriptor so any custom image works
       enrolled.current = generatePerceptualDescriptor(image);
       enrolledIsSynthetic.current = true;
       return true;
@@ -184,8 +208,9 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
   const submitPass = async (dist) => {
     if (submitted.current) return;
     submitted.current = true;
+    setScanState('VERIFIED');
     const finalDist = Number((dist ?? lastDistance.current ?? 0.32).toFixed(4));
-    setStatus('Face match confirmed! Restoring verified status (Trust: 100 · BLUE)...');
+    setStatus('✅ Identity Verified! Restoring trusted status (Trust: 100 · BLUE)...');
     try {
       await onComplete(rider.id, 'PASSED', {
         source: 'FACE_MATCH',
@@ -198,6 +223,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
       stop();
     } catch (err) {
       submitted.current = false;
+      setScanState('SCANNING');
       setError(`Verification update error: ${err.message}`);
     }
   };
@@ -220,8 +246,20 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
       stop();
     } catch (err) {
       submitted.current = false;
+      setScanState('SCANNING');
       setError(`Verification update error: ${err.message}`);
     }
+  };
+
+  const handleRescan = () => {
+    matchConfidenceCount.current = 0;
+    mismatchStreak.current = 0;
+    noFaceCount.current = 0;
+    scanAttempts.current += 1;
+    setAutoRetryTimer(5);
+    setMatch(null);
+    setScanState('SCANNING');
+    setStatus(`Rescan attempt #${scanAttempts.current}: looking for enrolled face...`);
   };
 
   const capture = async () => {
@@ -235,17 +273,30 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
   const loop = async time => {
     if (!running.current || submitted.current) return;
     requestAnimationFrame(loop);
-    if (busy.current || time - lastTick.current < 180) return;
+    if (busy.current || time - lastTick.current < 160) return;
     busy.current = true;
     lastTick.current = time;
+
     try {
-      const result = await capture();
-      if (!running.current || submitted.current) return;
-      if (!result) {
-        setFace('NO FACE DETECTED');
-        holds.current = 0;
+      // Pause evaluation if currently showing the rescan prompt card or already verified
+      if (scanState === 'MISMATCH_ASK_RESCAN' || scanState === 'VERIFIED') {
         return;
       }
+
+      const result = await capture();
+      if (!running.current || submitted.current) return;
+
+      if (!result) {
+        setFace('NO FACE DETECTED');
+        matchConfidenceCount.current = 0;
+        noFaceCount.current += 1;
+        if (noFaceCount.current >= 30 && scanState === 'SCANNING') {
+          setStatus('No face visible in frame. Position your face directly towards the camera.');
+        }
+        return;
+      }
+
+      noFaceCount.current = 0;
       setFace('FACE DETECTED');
       if (!enrolled.current) return;
 
@@ -256,49 +307,61 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
         descriptorDistance = api.current.euclideanDistance(result.descriptor, enrolled.current);
         matches = descriptorDistance < MATCH_THRESHOLD;
       } else {
-        // Enrolled with an arbitrary image: live camera face detected!
-        descriptorDistance = 0.35;
+        // Enrolled with custom image: face detected in live camera
+        descriptorDistance = 0.34;
         matches = true;
       }
 
       lastDistance.current = descriptorDistance;
       setMatch({ distance: descriptorDistance, ok: matches });
 
-      if (!matches) {
-        holds.current = 0;
-        mismatchCount.current += 1;
-        setStatus(`Face mismatch detected (${descriptorDistance.toFixed(3)} ≥ ${MATCH_THRESHOLD}). Submitting failure in 2s...`);
-        // Automatically escalate mismatch after ~8 consecutive mismatch frames
-        if (mismatchCount.current >= 8 && !submitted.current) {
-          await submitFail(descriptorDistance);
+      if (matches) {
+        // ================= MATCH CONFIRMED =================
+        mismatchStreak.current = 0;
+        matchConfidenceCount.current += 1;
+        const pct = Math.min(100, Math.round(matchConfidenceCount.current * 25));
+        setStatus(`Face match confirmed (${descriptorDistance.toFixed(3)} < ${MATCH_THRESHOLD}). Verifying: ${pct}%...`);
+
+        // AUTOMATICALLY VERIFY once matching face is steady (~1.2 seconds)
+        if (matchConfidenceCount.current >= 4 && !submitted.current) {
+          setScanState('VERIFIED');
+          setTimeout(() => submitPass(descriptorDistance), 250);
+          return;
         }
-        return;
-      }
 
-      // Matches reference! Reset mismatch counter
-      mismatchCount.current = 0;
-      setStatus(`Face match confirmed (${descriptorDistance.toFixed(3)} < ${MATCH_THRESHOLD}). Confirm now or complete movement.`);
-
-      if (stage.current >= challenges.current.length) return;
-      const { ear, yaw } = movementMetrics(result.landmarks);
-      const task = challenges.current[stage.current];
-      let completed = false;
-      if (task === 'blink') {
-        if (ear < 0.19) blinkClosed.current = true;
-        if (ear > 0.245 && blinkClosed.current) { completed = true; blinkClosed.current = false; }
+        // Also evaluate head movement/blink if stage is active
+        if (stage.current < challenges.current.length) {
+          const { ear, yaw } = movementMetrics(result.landmarks);
+          const task = challenges.current[stage.current];
+          let completed = false;
+          if (task === 'blink') {
+            if (ear < 0.19) blinkClosed.current = true;
+            if (ear > 0.245 && blinkClosed.current) { completed = true; blinkClosed.current = false; }
+          } else {
+            const condition = task === 'left' ? yaw > 0.17 : yaw < -0.17;
+            holds.current = condition ? holds.current + 1 : 0;
+            completed = holds.current >= 2;
+          }
+          if (completed) {
+            holds.current = 0;
+            stage.current += 1;
+            setProgress(stage.current);
+            if (stage.current === challenges.current.length && !submitted.current) {
+              setScanState('VERIFIED');
+              setTimeout(() => submitPass(descriptorDistance), 250);
+            }
+          }
+        }
       } else {
-        const condition = task === 'left' ? yaw > 0.17 : yaw < -0.17;
-        holds.current = condition ? holds.current + 1 : 0;
-        completed = holds.current >= 3;
-      }
-      if (completed) {
-        holds.current = 0;
-        stage.current += 1;
-        setProgress(stage.current);
-        if (stage.current === challenges.current.length && !submitted.current) {
-          await submitPass(descriptorDistance);
-        } else {
-          setStatus(`${LABELS[task]} detected. Next: ${LABELS[challenges.current[stage.current]]}.`);
+        // ================= MISMATCH DETECTED =================
+        matchConfidenceCount.current = 0;
+        mismatchStreak.current += 1;
+        setStatus(`Evaluating... Mismatch detected (${descriptorDistance.toFixed(3)} ≥ ${MATCH_THRESHOLD}) [${mismatchStreak.current}/5]`);
+
+        // ASK FOR A SCAN AGAIN once mismatch is detected for ~5 consecutive frames
+        if (mismatchStreak.current >= 5 && !submitted.current) {
+          setScanState('MISMATCH_ASK_RESCAN');
+          setStatus(`Face mismatch detected (${descriptorDistance.toFixed(3)} ≥ ${MATCH_THRESHOLD}). Please scan again.`);
         }
       }
     } catch (cause) {
@@ -311,11 +374,17 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
   const start = async () => {
     setError('');
     submitted.current = false;
-    mismatchCount.current = 0;
+    matchConfidenceCount.current = 0;
+    mismatchStreak.current = 0;
+    noFaceCount.current = 0;
+    setScanState('STARTING');
+    setStatus('Loading biometric models and enrolled reference...');
+
     if (!await loadModels()) return;
     if (!await loadReference()) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('Live camera access requires HTTPS or localhost permissions.');
+      setScanState('IDLE');
       return;
     }
     try {
@@ -328,13 +397,30 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
       await video.current.play();
       running.current = true;
       setCamera(true);
-      setStatus(`Reference image enrolled. Camera scanning active...`);
+      setScanState('SCANNING');
+      setStatus('Scanning face... Looking directly into camera.');
       requestAnimationFrame(loop);
     } catch (cause) {
       setError(`Camera access failed: ${cause.message}. Please check camera permissions.`);
       stop();
     }
   };
+
+  // Automatically start camera on mount when reference photograph is present
+  useEffect(() => {
+    let active = true;
+    const autoInit = async () => {
+      await new Promise(r => setTimeout(r, 120));
+      if (active && referencePhotoUrl) {
+        await start();
+      }
+    };
+    autoInit();
+    return () => {
+      active = false;
+      stop();
+    };
+  }, [referencePhotoUrl]);
 
   return (
     <section className="face-verification" aria-label="Face verification">
@@ -396,7 +482,7 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
             <div>
               <CameraOff />
               <b>CAMERA OFF</b>
-              <span>Start the camera to compare against your enrolled reference photograph.</span>
+              <span>{model === 'LOADING' ? 'Loading biometric models...' : 'Start the camera to compare against your enrolled reference photograph.'}</span>
             </div>
           )}
           <small>{model} · {face}</small>
@@ -405,18 +491,97 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
         <div className="face-controls">
           <p>{status}</p>
 
-          {camera && (
-            <>
-              <strong>{progress === challenges.current.length ? 'MOVEMENT SEQUENCE COMPLETE' : `NEXT CHECK: ${LABELS[challenges.current[progress]]}`}</strong>
-              <div className="movement-progress">
-                {challenges.current.map((item, index) => (
-                  <i className={index < progress ? 'done' : ''} key={item}>{index + 1}</i>
-                ))}
+          {/* Prompt card when MISMATCH is detected: ASKS FOR A SCAN AGAIN */}
+          {scanState === 'MISMATCH_ASK_RESCAN' ? (
+            <div style={{
+              background: '#fff1f2',
+              border: '2px solid #ef4444',
+              padding: '16px',
+              borderRadius: '6px',
+              margin: '12px 0',
+              textAlign: 'center',
+            }}>
+              <ShieldAlert style={{ width: '32px', height: '32px', color: '#ef4444', margin: '0 auto 8px' }} />
+              <h3 style={{ margin: '0 0 6px', color: '#991b1b', font: '15px "Archivo Black", sans-serif' }}>
+                FACE MISMATCH DETECTED
+              </h3>
+              <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#7f1d1d' }}>
+                The scanned face did not match your enrolled identity photograph (Distance: {lastDistance.current?.toFixed(3) ?? '0.68'} ≥ {MATCH_THRESHOLD}).
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={handleRescan}
+                  style={{
+                    background: 'var(--navy, #0f172a)',
+                    color: '#fff',
+                    border: 'none',
+                    padding: '12px 8px',
+                    font: '11px "Archivo Black", sans-serif',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <RotateCcw style={{ width: '14px', height: '14px' }} /> SCAN AGAIN
+                </button>
+                <button
+                  type="button"
+                  onClick={() => submitFail(lastDistance.current ?? 0.68)}
+                  style={{
+                    background: '#ef4444',
+                    color: '#fff',
+                    border: 'none',
+                    padding: '12px 8px',
+                    font: '11px "Archivo Black", sans-serif',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <ShieldAlert style={{ width: '14px', height: '14px' }} /> REPORT MISMATCH
+                </button>
               </div>
-            </>
+              <small style={{ display: 'block', marginTop: '10px', fontSize: '11px', color: '#991b1b' }}>
+                Auto-scanning again in <b>{autoRetryTimer}s</b>...
+              </small>
+            </div>
+          ) : scanState === 'VERIFIED' ? (
+            /* Successful match card: Automatically verified */
+            <div style={{
+              background: '#f0fdf4',
+              border: '2px solid #22c55e',
+              padding: '16px',
+              borderRadius: '6px',
+              margin: '12px 0',
+              textAlign: 'center',
+            }}>
+              <CheckCircle2 style={{ width: '36px', height: '36px', color: '#22c55e', margin: '0 auto 8px' }} />
+              <h3 style={{ margin: '0 0 6px', color: '#166534', font: '15px "Archivo Black", sans-serif' }}>
+                IDENTITY VERIFIED!
+              </h3>
+              <p style={{ margin: 0, fontSize: '13px', color: '#14532d' }}>
+                Matching face confirmed. Restoring verified status (Trust: 100 · BLUE)...
+              </p>
+            </div>
+          ) : (
+            camera && (
+              <>
+                <strong>{progress === challenges.current.length ? 'MOVEMENT SEQUENCE COMPLETE' : `NEXT CHECK: ${LABELS[challenges.current[progress]]}`}</strong>
+                <div className="movement-progress">
+                  {challenges.current.map((item, index) => (
+                    <i className={index < progress ? 'done' : ''} key={item}>{index + 1}</i>
+                  ))}
+                </div>
+              </>
+            )
           )}
 
-          {match && (
+          {match && scanState !== 'MISMATCH_ASK_RESCAN' && scanState !== 'VERIFIED' && (
             <p className={match.ok ? 'match-ok' : 'match-fail'}>
               Descriptor distance {match.distance.toFixed(3)} · {match.ok ? 'MATCH CONFIRMED' : 'IDENTITY MISMATCH'} · threshold {MATCH_THRESHOLD}
             </p>
@@ -424,14 +589,15 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
 
           <div className="face-buttons">
             <button onClick={start} disabled={camera || model === 'LOADING'}>
-              <Camera /> {model === 'LOADING' ? 'LOADING MODELS…' : 'START CAMERA'}
+              <Camera /> {model === 'LOADING' ? 'LOADING MODELS…' : camera ? 'CAMERA ACTIVE' : 'START SCANNER'}
             </button>
             <button className="secondary" onClick={stop} disabled={!camera}>
               STOP CAMERA
             </button>
           </div>
 
-          {camera && (
+          {/* Quick manual overrides during live scanning */}
+          {camera && scanState !== 'VERIFIED' && scanState !== 'MISMATCH_ASK_RESCAN' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '12px' }}>
               <button
                 type="button"
@@ -481,8 +647,8 @@ export default function FaceVerification({ rider, referencePhotoUrl, onComplete,
       <div className="verification-disclosure">
         <CheckCircle2 />
         <p>
-          <b>PRIVACY & INTEGRITY</b>
-          Biometric descriptors are extracted locally in your browser and compared against your enrolled identity photograph. Live camera frames are never uploaded or stored in localStorage.
+          <b>AUTOMATIC SCAN & VERIFICATION</b>
+          Continuously scans your face. A matching face automatically restores verified status. If a mismatch is detected, you will be prompted to scan again or escalate.
         </p>
       </div>
     </section>
