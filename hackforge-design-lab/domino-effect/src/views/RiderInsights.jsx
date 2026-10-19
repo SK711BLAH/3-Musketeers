@@ -3,68 +3,138 @@ import SelectMenu from '../components/SelectMenu';
 
 const formatMinute = minute => `${String(Math.floor((minute ?? 720) / 60)).padStart(2, '0')}:${String((minute ?? 720) % 60).padStart(2, '0')}`;
 
-function getHistoricalPoints(history, currentScore) {
-  const validHistory = history?.filter(item => item && item.score != null) ?? [];
-  if (validHistory.length >= 7) {
-    return validHistory.slice(-7).map((item, index) => ({
-      score: item.score,
-      label: index === validHistory.length - 1 ? 'Latest' : `Shift -${validHistory.length - 1 - index}`,
-      timestamp: item.timestamp,
-      action: item.action,
+const RIDER_DUMMY_TRAJECTORIES = {
+  'R-1042': [
+    { shift: 'Shift 1', score: 94, note: 'Normal routine' },
+    { shift: 'Shift 2', score: 92, note: 'Consistent route' },
+    { shift: 'Shift 3', score: 90, note: 'Standard delivery' },
+    { shift: 'Shift 4', score: 85, note: 'Minor schedule shift' },
+    { shift: 'Shift 5', score: 64, note: 'Unseen device logged' },
+    { shift: 'Shift 6', score: 48, note: 'Multivariate anomaly' },
+    { shift: 'Shift 7 (Now)', score: 28, note: 'Verification required' },
+  ],
+  'R-2187': [
+    { shift: 'Shift 1', score: 94, note: 'Indiranagar baseline' },
+    { shift: 'Shift 2', score: 95, note: 'Prompt deliveries' },
+    { shift: 'Shift 3', score: 92, note: 'Normal acceptance' },
+    { shift: 'Shift 4', score: 88, note: 'Stable pattern' },
+    { shift: 'Shift 5', score: 84, note: 'Route change' },
+    { shift: 'Shift 6', score: 80, note: 'Location drift' },
+    { shift: 'Shift 7 (Now)', score: 75, note: 'Observation active' },
+  ],
+  'R-3091': [
+    { shift: 'Shift 1', score: 92, note: 'CP Central route' },
+    { shift: 'Shift 2', score: 90, note: 'Normal timing' },
+    { shift: 'Shift 3', score: 88, note: 'Steady completion' },
+    { shift: 'Shift 4', score: 82, note: 'Device shift detected' },
+    { shift: 'Shift 5', score: 76, note: 'Telemetry variance' },
+    { shift: 'Shift 6', score: 70, note: 'Monitoring flag' },
+    { shift: 'Shift 7 (Now)', score: 67, note: 'Observing state' },
+  ],
+  'R-4470': [
+    { shift: 'Shift 1', score: 95, note: 'Normal baseline' },
+    { shift: 'Shift 2', score: 91, note: 'High acceptance' },
+    { shift: 'Shift 3', score: 86, note: 'Standard shift' },
+    { shift: 'Shift 4', score: 72, note: 'Multiple devices' },
+    { shift: 'Shift 5', score: 54, note: 'Re-verification call' },
+    { shift: 'Shift 6', score: 38, note: 'Face check failed' },
+    { shift: 'Shift 7 (Now)', score: 24, note: 'Human review required' },
+  ],
+  'R-5108': [
+    { shift: 'Shift 1', score: 92, note: 'Hitec City shifts' },
+    { shift: 'Shift 2', score: 89, note: 'Normal acceptance' },
+    { shift: 'Shift 3', score: 84, note: 'Route adherence' },
+    { shift: 'Shift 4', score: 68, note: 'Start time moved +5h' },
+    { shift: 'Shift 5', score: 52, note: 'Acceptance dropped' },
+    { shift: 'Shift 6', score: 35, note: 'Policy escalation' },
+    { shift: 'Shift 7 (Now)', score: 24, note: 'Human review active' },
+  ],
+  'R-6284': [
+    { shift: 'Shift 1', score: 94, note: 'Established route' },
+    { shift: 'Shift 2', score: 96, note: '100% acceptance' },
+    { shift: 'Shift 3', score: 95, note: 'Consistent timing' },
+    { shift: 'Shift 4', score: 98, note: 'Smooth shift' },
+    { shift: 'Shift 5', score: 95, note: 'Recognised device' },
+    { shift: 'Shift 6', score: 97, note: 'Clean telemetry' },
+    { shift: 'Shift 7 (Now)', score: 96, note: 'High assurance' },
+  ],
+  'R-7315': [
+    { shift: 'Shift 1', score: 93, note: 'Salt Lake deliveries' },
+    { shift: 'Shift 2', score: 95, note: 'On-time completions' },
+    { shift: 'Shift 3', score: 97, note: 'Consistent baseline' },
+    { shift: 'Shift 4', score: 94, note: 'Normal shift length' },
+    { shift: 'Shift 5', score: 96, note: 'Standard device' },
+    { shift: 'Shift 6', score: 98, note: 'Expected timing' },
+    { shift: 'Shift 7 (Now)', score: 96, note: 'Trusted rider' },
+  ],
+  'R-8462': [
+    { shift: 'Shift 1', score: 86, note: 'Initial observation' },
+    { shift: 'Shift 2', score: 88, note: 'T. Nagar routine' },
+    { shift: 'Shift 3', score: 85, note: 'Device authenticated' },
+    { shift: 'Shift 4', score: 89, note: 'Steady completion' },
+    { shift: 'Shift 5', score: 87, note: 'Normal shift length' },
+    { shift: 'Shift 6', score: 90, note: 'Score recovered' },
+    { shift: 'Shift 7 (Now)', score: 88, note: 'Trusted status' },
+  ],
+  'R-9001': [
+    { shift: 'Shift 1', score: 95, note: 'Seeded baseline' },
+    { shift: 'Shift 2', score: 96, note: 'High acceptance' },
+    { shift: 'Shift 3', score: 94, note: 'Normal route' },
+    { shift: 'Shift 4', score: 98, note: 'Smooth delivery' },
+    { shift: 'Shift 5', score: 95, note: 'Verified session' },
+    { shift: 'Shift 6', score: 99, note: 'Optimal performance' },
+    { shift: 'Shift 7 (Now)', score: 100, note: 'Live interactive status' },
+  ],
+};
+
+function getRiderTrajectory(rider) {
+  const curr = Number(rider?.trustScore) ?? 80;
+  const canned = RIDER_DUMMY_TRAJECTORIES[rider?.id];
+  if (canned) {
+    return canned.map((item, index) => ({
+      ...item,
+      score: index === canned.length - 1 ? curr : item.score,
     }));
   }
 
-  const curr = Number(currentScore) || 80;
-  let curve;
-  if (curr >= 85) {
-    curve = [curr - 4, curr + 2, curr - 2, curr + 3, curr - 1, curr + 2, curr];
-  } else if (curr >= 70) {
-    curve = [92, 94, 89, 86, 82, 78, curr];
-  } else if (curr >= 50) {
-    curve = [90, 88, 82, 76, 68, 62, curr];
-  } else {
-    curve = [94, 88, 80, 64, 46, 32, curr];
-  }
-
-  const needed = Math.max(0, 7 - validHistory.length);
-  const dummyPrefix = curve.slice(0, needed).map((val, idx) => ({
-    score: Math.min(100, Math.max(10, val)),
-    label: `Shift -${6 - idx}`,
-    timestamp: new Date(Date.now() - (6 - idx) * 86400000).toISOString(),
-    action: idx < 3 ? 'BASELINE_SHIFT' : 'ROUTINE_MONITORING',
-  }));
-
-  const realSuffix = validHistory.map((item, idx) => ({
-    score: item.score,
-    label: idx === validHistory.length - 1 ? 'Latest' : `Shift -${validHistory.length - 1 - idx}`,
-    timestamp: item.timestamp,
-    action: item.action || 'CURRENT_STATE',
-  }));
-
-  return [...dummyPrefix, ...realSuffix];
+  const base = Math.min(96, Math.max(88, curr + 8));
+  return [
+    { shift: 'Shift 1', score: base, note: 'Baseline shift' },
+    { shift: 'Shift 2', score: Math.min(100, base + 2), note: 'Route match' },
+    { shift: 'Shift 3', score: Math.max(10, base - 2), note: 'Consistent shift' },
+    { shift: 'Shift 4', score: Math.round((base + curr) / 2 + 3), note: 'Shift activity' },
+    { shift: 'Shift 5', score: Math.round((base + curr) / 2), note: 'Observation flag' },
+    { shift: 'Shift 6', score: Math.round((base + curr * 3) / 4), note: 'Recent telemetry' },
+    { shift: 'Shift 7 (Now)', score: curr, note: 'Current status' },
+  ];
 }
 
-function TrustSparkline({ history, score }) {
-  const points = getHistoricalPoints(history, score);
+function TrustScoreGraph({ rider }) {
+  const points = getRiderTrajectory(rider);
   const scores = points.map(p => p.score);
+  const currentScore = scores[scores.length - 1];
   const minScore = Math.min(...scores);
   const maxScore = Math.max(...scores);
-  const trend = scores[scores.length - 1] - scores[0];
+  const trend = currentScore - scores[0];
 
-  const width = 360;
-  const height = 110;
-  const padLeft = 32;
-  const padRight = 20;
-  const padTop = 18;
-  const padBottom = 24;
+  const themeColor = currentScore >= 80 ? '#2563eb' : currentScore >= 50 ? '#d97706' : '#dc2626';
+  const badgeBg = currentScore >= 80 ? 'rgba(37,99,235,0.12)' : currentScore >= 50 ? 'rgba(217,119,6,0.12)' : 'rgba(220,38,38,0.12)';
+  const statusLabel = currentScore >= 80 ? 'TRUSTED' : currentScore >= 50 ? 'SUSPICIOUS' : 'HIGH RISK';
 
-  const innerW = width - padLeft - padRight;
-  const innerH = height - padTop - padBottom;
+  const svgWidth = 560;
+  const svgHeight = 220;
+  const padLeft = 44;
+  const padRight = 30;
+  const padTop = 26;
+  const padBottom = 42;
+
+  const innerW = svgWidth - padLeft - padRight;
+  const innerH = svgHeight - padTop - padBottom;
 
   const coords = points.map((item, index) => {
     const x = padLeft + (index * innerW) / Math.max(1, points.length - 1);
     const y = padTop + ((100 - item.score) / 100) * innerH;
-    return { x, y, score: item.score, label: item.label, action: item.action };
+    return { x, y, score: item.score, shift: item.shift, note: item.note };
   });
 
   const polylineStr = coords.map(c => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
@@ -74,98 +144,241 @@ function TrustSparkline({ history, score }) {
     `${coords[0].x.toFixed(1)},${(padTop + innerH).toFixed(1)}`,
   ].join(' ');
 
-  const strokeColor = score >= 80 ? 'var(--blue, #2563eb)' : score >= 50 ? 'var(--yellow, #f59e0b)' : 'var(--red, #ef4444)';
-  const gradientId = `trust-grad-${score}`;
+  const gradId = `trust-grad-${rider?.id || 'default'}-${currentScore}`;
+
+  // Threshold Y positions
+  const y80 = padTop + ((100 - 80) / 100) * innerH;
+  const y50 = padTop + ((100 - 50) / 100) * innerH;
+  const y25 = padTop + ((100 - 25) / 100) * innerH;
+  const y0 = padTop + innerH;
+  const y100 = padTop;
 
   return (
-    <div className="trust-sparkline-container">
-      <div className="sparkline-stats" style={{
+    <div className="trust-score-graph-card" style={{ width: '100%', minWidth: 0 }}>
+      {/* 4-Column KPI Bar */}
+      <div className="trust-kpi-bar" style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '6px',
-        marginBottom: '10px',
-        padding: '8px 10px',
-        background: 'rgba(15, 23, 42, 0.04)',
-        border: '1px solid var(--line, #e2e8f0)',
+        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+        gap: '8px',
+        marginBottom: '12px',
+        padding: '10px 14px',
+        background: '#ffffff',
+        border: '1px solid var(--navy, #0f172a)',
       }}>
         <div>
-          <span style={{ fontSize: '8px', color: '#64748b', display: 'block', fontWeight: 'bold' }}>CURRENT</span>
-          <b style={{ fontSize: '13px', fontFamily: '"Archivo Black", sans-serif', color: strokeColor }}>{score}%</b>
+          <span style={{ fontSize: '8px', color: '#64748b', fontWeight: 700, letterSpacing: '0.8px', display: 'block' }}>CURRENT TRUST</span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px', marginTop: '2px', flexWrap: 'wrap' }}>
+            <b style={{ fontSize: '18px', fontFamily: '"Archivo Black", sans-serif', color: themeColor }}>{currentScore}%</b>
+            <span style={{ fontSize: '8px', fontWeight: 800, padding: '2px 5px', borderRadius: '2px', background: badgeBg, color: themeColor, fontFamily: '"Archivo Black", sans-serif' }}>{statusLabel}</span>
+          </div>
         </div>
         <div>
-          <span style={{ fontSize: '8px', color: '#64748b', display: 'block', fontWeight: 'bold' }}>PEAK</span>
-          <b style={{ fontSize: '13px', fontFamily: '"Archivo Black", sans-serif' }}>{maxScore}%</b>
+          <span style={{ fontSize: '8px', color: '#64748b', fontWeight: 700, letterSpacing: '0.8px', display: 'block' }}>BASELINE TARGET</span>
+          <b style={{ fontSize: '18px', fontFamily: '"Archivo Black", sans-serif', color: 'var(--navy, #0f172a)', display: 'block', marginTop: '2px' }}>80%</b>
         </div>
         <div>
-          <span style={{ fontSize: '8px', color: '#64748b', display: 'block', fontWeight: 'bold' }}>LOWEST</span>
-          <b style={{ fontSize: '13px', fontFamily: '"Archivo Black", sans-serif' }}>{minScore}%</b>
+          <span style={{ fontSize: '8px', color: '#64748b', fontWeight: 700, letterSpacing: '0.8px', display: 'block' }}>7-SHIFT PEAK</span>
+          <b style={{ fontSize: '18px', fontFamily: '"Archivo Black", sans-serif', color: 'var(--navy, #0f172a)', display: 'block', marginTop: '2px' }}>{maxScore}%</b>
         </div>
         <div>
-          <span style={{ fontSize: '8px', color: '#64748b', display: 'block', fontWeight: 'bold' }}>7-SHIFT TREND</span>
-          <b style={{ fontSize: '13px', fontFamily: '"Archivo Black", sans-serif', color: trend >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)' }}>
+          <span style={{ fontSize: '8px', color: '#64748b', fontWeight: 700, letterSpacing: '0.8px', display: 'block' }}>7-SHIFT NET TREND</span>
+          <b style={{ fontSize: '18px', fontFamily: '"Archivo Black", sans-serif', color: trend >= 0 ? '#16a34a' : '#ef4444', display: 'block', marginTop: '2px' }}>
             {trend > 0 ? `+${trend}%` : `${trend}%`}
           </b>
         </div>
       </div>
 
-      <svg className="insight-sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Recorded trust score over time" style={{ width: '100%', height: '140px' }}>
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={strokeColor} stopOpacity="0.32" />
-            <stop offset="100%" stopColor={strokeColor} stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
+      {/* Primary SVG Chart */}
+      <div style={{
+        background: '#ffffff',
+        border: '1px solid var(--navy, #0f172a)',
+        padding: '12px 10px 8px',
+        overflow: 'hidden',
+      }}>
+        <svg
+          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+          role="img"
+          aria-label={`Recorded trust score graph for ${rider?.name}: current score ${currentScore}%`}
+          style={{ width: '100%', height: 'auto', display: 'block', maxHeight: '230px' }}
+        >
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={themeColor} stopOpacity="0.38" />
+              <stop offset="85%" stopColor={themeColor} stopOpacity="0.04" />
+              <stop offset="100%" stopColor={themeColor} stopOpacity="0.00" />
+            </linearGradient>
+          </defs>
 
-        {/* 80% Safe Threshold line */}
-        <line x1={padLeft} x2={width - padRight} y1={padTop + 0.2 * innerH} y2={padTop + 0.2 * innerH} stroke="#22c55e" strokeWidth="0.8" strokeDasharray="3 3" opacity="0.6" />
-        <text x={padLeft - 4} y={padTop + 0.2 * innerH + 3} textAnchor="end" fontSize="7" fill="#22c55e" fontFamily="'Archivo Black', sans-serif">80</text>
+          {/* Background Zone Tints */}
+          <rect x={padLeft} y={y100} width={innerW} height={y80 - y100} fill="#22c55e" fillOpacity="0.05" />
+          <rect x={padLeft} y={y80} width={innerW} height={y50 - y80} fill="#f59e0b" fillOpacity="0.04" />
+          <rect x={padLeft} y={y50} width={innerW} height={y0 - y50} fill="#ef4444" fillOpacity="0.05" />
 
-        {/* 50% Suspicious Threshold line */}
-        <line x1={padLeft} x2={width - padRight} y1={padTop + 0.5 * innerH} y2={padTop + 0.5 * innerH} stroke="#f59e0b" strokeWidth="0.8" strokeDasharray="3 3" opacity="0.5" />
-        <text x={padLeft - 4} y={padTop + 0.5 * innerH + 3} textAnchor="end" fontSize="7" fill="#f59e0b" fontFamily="'Archivo Black', sans-serif">50</text>
+          {/* Horizontal Grid & Threshold Lines */}
+          <line x1={padLeft} x2={svgWidth - padRight} y1={y100} y2={y100} stroke="#e2e8f0" strokeWidth="1" />
+          <text x={padLeft - 6} y={y100 + 3} textAnchor="end" fontSize="7.5" fill="#94a3b8" fontFamily="'Archivo Black', sans-serif">100</text>
 
-        {/* 25% Critical Threshold line */}
-        <line x1={padLeft} x2={width - padRight} y1={padTop + 0.75 * innerH} y2={padTop + 0.75 * innerH} stroke="#ef4444" strokeWidth="0.8" strokeDasharray="3 3" opacity="0.5" />
-        <text x={padLeft - 4} y={padTop + 0.75 * innerH + 3} textAnchor="end" fontSize="7" fill="#ef4444" fontFamily="'Archivo Black', sans-serif">25</text>
+          {/* 80% Safe Baseline */}
+          <line x1={padLeft} x2={svgWidth - padRight} y1={y80} y2={y80} stroke="#22c55e" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.85" />
+          <text x={padLeft - 6} y={y80 + 3} textAnchor="end" fontSize="7.5" fill="#16a34a" fontFamily="'Archivo Black', sans-serif" fontWeight="bold">80</text>
+          <text x={svgWidth - padRight - 4} y={y80 - 4} textAnchor="end" fontSize="6.5" fill="#16a34a" fontFamily="'Archivo Black', sans-serif">SAFE (80)</text>
 
-        {/* Shaded Area fill */}
-        <polygon points={areaPolygonStr} fill={`url(#${gradientId})`} />
+          {/* 50% Watch Threshold */}
+          <line x1={padLeft} x2={svgWidth - padRight} y1={y50} y2={y50} stroke="#f59e0b" strokeWidth="1.2" strokeDasharray="4 3" opacity="0.85" />
+          <text x={padLeft - 6} y={y50 + 3} textAnchor="end" fontSize="7.5" fill="#d97706" fontFamily="'Archivo Black', sans-serif" fontWeight="bold">50</text>
+          <text x={svgWidth - padRight - 4} y={y50 - 4} textAnchor="end" fontSize="6.5" fill="#d97706" fontFamily="'Archivo Black', sans-serif">WATCH (50)</text>
 
-        {/* Main trend line */}
-        <polyline points={polylineStr} fill="none" stroke={strokeColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          {/* 25% Critical Line */}
+          <line x1={padLeft} x2={svgWidth - padRight} y1={y25} y2={y25} stroke="#ef4444" strokeWidth="1" strokeDasharray="3 3" opacity="0.65" />
+          <text x={padLeft - 6} y={y25 + 3} textAnchor="end" fontSize="7.5" fill="#dc2626" fontFamily="'Archivo Black', sans-serif">25</text>
 
-        {/* Datapoints & labels */}
-        {coords.map((item, index) => {
-          const isLatest = index === coords.length - 1;
-          return (
-            <g key={`${item.label}-${index}`}>
-              {/* Outer pulsing ring on latest */}
-              {isLatest && (
-                <circle cx={item.x} cy={item.y} r="7.5" fill="none" stroke={strokeColor} strokeWidth="1.5" strokeDasharray="2 2" opacity="0.85" />
-              )}
-              {/* Score label above circle */}
-              <text x={item.x} y={item.y - 6} textAnchor="middle" fontSize="7.5" fontFamily="'Archivo Black', sans-serif" fill="var(--navy, #0f172a)">
-                {item.score}
-              </text>
-              {/* Point circle */}
-              <circle
-                cx={item.x}
-                cy={item.y}
-                r={isLatest ? 4.5 : 3.5}
-                fill={isLatest ? strokeColor : '#fff'}
-                stroke={strokeColor}
-                strokeWidth="2"
-              >
-                <title>{`${item.label}: Trust ${item.score}% (${item.action || 'Recorded shift'})`}</title>
-              </circle>
-              {/* X-axis label */}
-              <text x={item.x} y={height - 8} textAnchor="middle" fontSize="7" fill="#64748b" fontFamily="sans-serif">
-                {item.label}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+          {/* 0% Axis Line */}
+          <line x1={padLeft} x2={svgWidth - padRight} y1={y0} y2={y0} stroke="var(--navy, #0f172a)" strokeWidth="1.2" />
+          <text x={padLeft - 6} y={y0 + 3} textAnchor="end" fontSize="7.5" fill="#94a3b8" fontFamily="'Archivo Black', sans-serif">0</text>
+
+          {/* Vertical Grid Columns */}
+          {coords.map((c, i) => (
+            <line
+              key={`grid-vert-${i}`}
+              x1={c.x}
+              x2={c.x}
+              y1={y100}
+              y2={y0}
+              stroke="#e2e8f0"
+              strokeWidth="0.8"
+              strokeDasharray="2 3"
+            />
+          ))}
+
+          {/* Shaded Area fill */}
+          <polygon points={areaPolygonStr} fill={`url(#${gradId})`} />
+
+          {/* Main Trend Line */}
+          <polyline
+            points={polylineStr}
+            fill="none"
+            stroke={themeColor}
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {/* Data Points, Score Badges, and X-Axis Labels */}
+          {coords.map((item, index) => {
+            const isLatest = index === coords.length - 1;
+            const ptColor = item.score >= 80 ? '#2563eb' : item.score >= 50 ? '#d97706' : '#dc2626';
+
+            return (
+              <g key={`point-${item.shift}-${index}`}>
+                {/* Outer ring on current point */}
+                {isLatest && (
+                  <circle
+                    cx={item.x}
+                    cy={item.y}
+                    r="8.5"
+                    fill="none"
+                    stroke={themeColor}
+                    strokeWidth="1.6"
+                    strokeDasharray="2.5 2.5"
+                    opacity="0.9"
+                  />
+                )}
+
+                {/* Score badge floating above point */}
+                <g>
+                  <rect
+                    x={item.x - 14}
+                    y={Math.max(4, item.y - 19)}
+                    width="28"
+                    height="13"
+                    rx="2"
+                    fill={isLatest ? themeColor : '#0f172a'}
+                  />
+                  <text
+                    x={item.x}
+                    y={Math.max(4, item.y - 19) + 9.5}
+                    textAnchor="middle"
+                    fontSize="7.5"
+                    fontFamily="'Archivo Black', sans-serif"
+                    fill="#ffffff"
+                    fontWeight="bold"
+                  >
+                    {item.score}%
+                  </text>
+                </g>
+
+                {/* Main Data Point Circle */}
+                <circle
+                  cx={item.x}
+                  cy={item.y}
+                  r={isLatest ? 5 : 4}
+                  fill="#ffffff"
+                  stroke={isLatest ? themeColor : ptColor}
+                  strokeWidth="2.5"
+                >
+                  <title>{`${item.shift}: Trust ${item.score}% — ${item.note}`}</title>
+                </circle>
+
+                {/* X-axis shift name */}
+                <text
+                  x={item.x}
+                  y={y0 + 13}
+                  textAnchor="middle"
+                  fontSize="7.5"
+                  fontFamily="'Archivo Black', sans-serif"
+                  fill={isLatest ? themeColor : 'var(--navy, #0f172a)'}
+                  fontWeight={isLatest ? 'bold' : 'normal'}
+                >
+                  {item.shift}
+                </text>
+
+                {/* Shift status / event note below */}
+                <text
+                  x={item.x}
+                  y={y0 + 23}
+                  textAnchor="middle"
+                  fontSize="6.5"
+                  fontFamily="sans-serif"
+                  fill="#64748b"
+                >
+                  {item.note}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      {/* Legend & Explanation Footer */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '8px',
+        marginTop: '8px',
+        paddingTop: '6px',
+        fontSize: '8px',
+        color: '#64748b',
+      }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
+            <b style={{ color: 'var(--navy, #0f172a)' }}>Safe Zone (≥80)</b>
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} />
+            <b style={{ color: 'var(--navy, #0f172a)' }}>Review (50–79)</b>
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
+            <b style={{ color: 'var(--navy, #0f172a)' }}>High Risk (&lt;50)</b>
+          </span>
+        </div>
+        <span style={{ fontStyle: 'italic' }}>
+          Continuous 7-shift timeline dynamically synced with live verification
+        </span>
+      </div>
     </div>
   );
 }
@@ -191,10 +404,17 @@ export default function RiderInsights({ riders, events, selectedId, onSelect }) 
     </section>
 
     <section className="insights-grid">
-      <article>
-        <header><Activity /><span>TRUST SCORE OVER TIME</span></header>
-        <TrustSparkline history={rider.trustHistory} score={rider.trustScore} />
-        <small>Multi-shift continuity timeline · Thresholds: 80 Safe, 50 Watch, 25 High Risk.</small>
+      <article className="trust-graph-article">
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Activity />
+            <span>TRUST SCORE OVER TIME</span>
+          </div>
+          <span style={{ fontSize: '8px', padding: '3px 7px', background: 'var(--navy, #0f172a)', color: '#ffffff', fontFamily: '"Archivo Black", sans-serif', letterSpacing: '1px' }}>
+            DUMMY TELEMETRY · 7 SHIFTS
+          </span>
+        </header>
+        <TrustScoreGraph rider={rider} />
       </article>
       <article><header><ShieldCheck /><span>BEHAVIOURAL BASELINE</span></header><dl>
         <div><dt>USUAL START</dt><dd>{formatMinute(baseline.normalStartMinute)}</dd></div>

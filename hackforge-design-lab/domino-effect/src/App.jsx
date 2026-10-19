@@ -126,6 +126,6 @@ export default function App() {
     <Header view={view} onNavigate={setView} onRiderDemo={() => setView('RIDER PORTAL')} mode={api.mode} />
     {content}
     {view === 'LIVE MONITOR' && selectedRider && <RiderPanel rider={selectedRider} events={events} incidents={incidents} closing={panelClosing} onClose={closeRiderPanel} />}
-    <footer><span>STILLYOU? / CONTINUOUS IDENTITY</span><b>SYNTHETIC BEHAVIOUR · REAL ML · OPTIONAL LOCAL FACE MATCH</b><span>EXPLAINABLE / APPEALABLE / HUMAN REVIEW</span></footer>
+    <footer><span>STILLYOU? / CONTINUOUS IDENTITY</span><span>Know who's behind the Ride</span></footer>
   </div>;
 }
