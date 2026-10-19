@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import secrets
 import shutil
 import sqlite3
@@ -282,16 +283,11 @@ def seed_demo_access(connection: sqlite3.Connection) -> None:
         )
     connection.execute("UPDATE rider_accounts SET baseline_status='ESTABLISHED' WHERE rider_id=?", (demo_id,))
     
-    # Pre-seed registered reference photograph for live demonstration
-    ref_file = ROOT / "demo_reference.jpg"
-    if ref_file.exists():
-        curr_photo = connection.execute("SELECT profile_photo_data FROM rider_accounts WHERE rider_id=?", (demo_id,)).fetchone()
-        if not curr_photo or not curr_photo["profile_photo_data"]:
-            photo_bytes = ref_file.read_bytes()
-            connection.execute(
-                "UPDATE rider_accounts SET profile_photo_data=?,profile_photo_mime='image/jpeg',profile_photo_path=? WHERE rider_id=?",
-                (photo_bytes, str(ref_file), demo_id),
-            )
+    # Clear hardcoded demo reference photo linkage so any custom photograph can be enrolled
+    connection.execute(
+        "UPDATE rider_accounts SET profile_photo_data=NULL, profile_photo_mime=NULL, profile_photo_path=NULL WHERE rider_id=? AND (profile_photo_path LIKE '%demo_reference%' OR length(profile_photo_data) IN (427104, 168999))",
+        (demo_id,),
+    )
             
     if not connection.execute("SELECT 1 FROM deliveries LIMIT 1").fetchone():
         now = utc_now()
@@ -1174,23 +1170,40 @@ class OtpVerifyRequest(BaseModel):
 
 
 def decode_reference_photo(data_url: str) -> tuple[bytes, str]:
-    if "," not in data_url:
-        raise ValueError("A JPEG or PNG profile photograph is required")
-    header, encoded = data_url.split(",", 1)
-    extension = ".png" if "image/png" in header else ".jpg" if "image/jpeg" in header else None
-    if not extension:
-        raise ValueError("Profile photograph must be JPEG or PNG")
+    if not data_url or not isinstance(data_url, str):
+        raise ValueError("A valid photograph is required")
+
+    mime_type = "image/jpeg"
+    if "," in data_url:
+        header, encoded = data_url.split(",", 1)
+        if "image/" in header:
+            match = re.search(r"image/([a-zA-Z0-9\+\-\.]+)", header)
+            if match:
+                mime_type = f"image/{match.group(1)}"
+    else:
+        encoded = data_url
+
     try:
-        raw = base64.b64decode(encoded, validate=True)
-    except ValueError as error:
-        raise ValueError("Profile photograph is not valid base64 data") from error
-    if not 1_000 <= len(raw) <= 12_000_000:
-        raise ValueError("Profile photograph must be between 1 KB and 12 MB")
-    if extension == ".png" and not raw.startswith(b"\x89PNG"):
-        raise ValueError("Invalid PNG photograph")
-    if extension == ".jpg" and not raw.startswith(b"\xff\xd8"):
-        raise ValueError("Invalid JPEG photograph")
-    return raw, "image/png" if extension == ".png" else "image/jpeg"
+        cleaned = re.sub(r"\s+", "", encoded)
+        raw = base64.b64decode(cleaned)
+    except Exception as error:
+        raise ValueError("Photograph is not valid base64 data") from error
+
+    if len(raw) < 50:
+        raise ValueError("Photograph file is too small")
+    if len(raw) > 25_000_000:
+        raise ValueError("Photograph file exceeds 25 MB limit")
+
+    if raw.startswith(b"\x89PNG"):
+        mime_type = "image/png"
+    elif raw.startswith(b"\xff\xd8"):
+        mime_type = "image/jpeg"
+    elif raw.startswith(b"RIFF") and b"WEBP" in raw[:16]:
+        mime_type = "image/webp"
+    elif raw.startswith(b"GIF8"):
+        mime_type = "image/gif"
+
+    return raw, mime_type
 
 
 def save_reference_photo(rider_id: str, data_url: str) -> tuple[bytes, str]:

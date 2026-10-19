@@ -8,28 +8,33 @@ const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 const compressImage = file => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = e => {
+    const rawDataUrl = e.target.result;
     const img = new Image();
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let { width, height } = img;
-      const maxDim = 1024;
-      if (width > maxDim || height > maxDim) {
-        if (width > height) {
-          height = Math.round((height * maxDim) / width);
-          width = maxDim;
-        } else {
-          width = Math.round((width * maxDim) / height);
-          height = maxDim;
+      try {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        const maxDim = 1024;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
         }
+        canvas.width = Math.max(width, 1);
+        canvas.height = Math.max(height, 1);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.88));
+      } catch {
+        resolve(rawDataUrl);
       }
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
     };
-    img.onerror = () => reject(new Error('Could not parse photograph format'));
-    img.src = e.target.result;
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
   };
   reader.onerror = () => reject(new Error('Could not read the selected photograph'));
   reader.readAsDataURL(file);
@@ -121,7 +126,7 @@ function AuthPage({ onAuthenticated, onBack, initialError = '' }) {
           <label>FULL NAME<input required value={registration.full_name} onChange={event => setRegistration({ ...registration, full_name: event.target.value })} /></label>
           <label>PRIMARY DELIVERY AREA<input required value={registration.primary_area} onChange={event => setRegistration({ ...registration, primary_area: event.target.value })} /></label>
           <label>PREFERRED WORKING HOURS<input value={registration.preferred_hours} onChange={event => setRegistration({ ...registration, preferred_hours: event.target.value })} /></label>
-          <label className="photo-input">REFERENCE PHOTOGRAPH<input required type="file" accept="image/jpeg,image/png" onChange={photo} /><span><Upload />{registration.photo_data ? 'PHOTOGRAPH READY' : 'CHOOSE JPEG OR PNG'}</span></label>
+          <label className="photo-input">REFERENCE PHOTOGRAPH<input required type="file" accept="image/*" onChange={photo} /><span><Upload />{registration.photo_data ? 'PHOTOGRAPH READY' : 'CHOOSE ANY PHOTO'}</span></label>
         </>}
         <label>EMAIL, PHONE, OR RIDER ID<input required value={mode === 'login' ? identifier : registration.contact} onChange={event => mode === 'login' ? setIdentifier(event.target.value) : setRegistration({ ...registration, contact: event.target.value })} /></label>
         <label>PASSWORD<input required type="password" minLength="8" value={mode === 'login' ? password : registration.password} onChange={event => mode === 'login' ? setPassword(event.target.value) : setRegistration({ ...registration, password: event.target.value })} /></label>
@@ -383,9 +388,17 @@ export default function RiderPortal({ onComplete, onRefresh, onBack }) {
         <button type="button" onClick={() => openVerification('face')}><ScanFace /> FACE VERIFICATION</button>
         <button type="button" onClick={() => openVerification('otp')}><KeyRound /> OTP VERIFICATION</button>
         <label>
-          <input type="file" accept="image/jpeg,image/png" capture="user" onChange={uploadReference} />
+          <input type="file" accept="image/*" onChange={uploadReference} />
           <Upload /> {rider.hasReferencePhoto ? 'UPDATE REFERENCE PHOTO' : 'ENROLL REFERENCE PHOTO'}
         </label>
+        {referenceUrl && (
+          <img
+            src={referenceUrl}
+            alt="Reference"
+            style={{ width: '38px', height: '38px', objectFit: 'cover', border: '1px solid var(--navy)', alignSelf: 'center', borderRadius: '3px' }}
+            title="Enrolled reference photograph"
+          />
+        )}
       </div>
       <small>
         Face matching runs locally in your browser against your privately stored reference photo. The enrolled photograph is never exposed in localStorage.
@@ -483,14 +496,14 @@ export default function RiderPortal({ onComplete, onRefresh, onBack }) {
           </div>
           {verificationMethod === 'face' ? (
             rider.hasReferencePhoto ? (
-              <FaceVerification rider={rider} referencePhotoUrl={referenceUrl} onComplete={complete} />
+              <FaceVerification rider={rider} referencePhotoUrl={referenceUrl} onComplete={complete} onUpdatePhoto={uploadReference} />
             ) : (
               <div className="enrol-within-verification">
                 <Upload />
                 <h3>ENROL YOUR IDENTITY REFERENCE</h3>
-                <p>A reference image is required for biometric comparison. Please upload a clear photograph of yourself.</p>
+                <p>A reference image is required for biometric comparison. Please upload or choose any photo from your device.</p>
                 <label>
-                  <input type="file" accept="image/jpeg,image/png" capture="user" onChange={uploadReference} />
+                  <input type="file" accept="image/*" onChange={uploadReference} />
                   UPLOAD REFERENCE PHOTO
                 </label>
               </div>
